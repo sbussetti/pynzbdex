@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>{% block head %}
+<style>
+.centered {
+    text-align: center;
+}
+
+.table {
+    width: 100%;
+    display: table;
+    border: 1px solid black;
+    border-collapse:collapse;
+}
+
+.table .table-row {
+    display: table-row;
+    border: 1px solid black;
+}
+
+.table .table-row .cell {
+    display: table-cell;
+    padding: 4px 4px;
+}
+.table .table-row .cell:first-of-type {
+    padding-left: 8px;
+}
+.table .table-row .cell:last-of-type {
+    padding-right: 8px;
+}
+
+.table .table-row .cell .left {
+    float:left;
+}
+.table .table-row .cell .right {
+    float:left;
+}
+.table .table-row .cell .right ul.sort {
+
+}
+
+
+
+.table .table-row.row-header {
+    display: table-header-group;
+}
+
+.table .table-row.row-footer {
+    display: table-footer-group;
+}
+
+.group_info {
+    width: 500px;
+}
+</style>
+<link href="//netdna.bootstrapcdn.com/twitter-bootstrap/2.2.2/css/bootstrap-combined.min.css" rel="stylesheet">
+<script src="//netdna.bootstrapcdn.com/twitter-bootstrap/2.2.2/js/bootstrap.min.js"></script>
+{% endblock %}</head>
+<body>
+    <div class="container-fluid">
+    {% block body %}{% endblock %}
+    </div>
+</body>
+</html>

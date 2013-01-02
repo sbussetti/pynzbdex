@@ -1,0 +1,28 @@
+        <div class="pagination pagination-right pagination-small">
+            <ul>
+                <li><a href="?{{ request|query(p=0) }}">first</a></li>
+                {% if pager.prev_page %} 
+                <li><a href="?{{ request|query(p=pager.prev_page) }}">prev</a></li>
+                {% else %}
+                <li class="disabled"><a href="#">prev</a></li>
+                {% endif %}
+
+            {% for p, o in pager.pages %}
+                <li class="{% if p == pager.current_page %}active{% endif %}"><a href="?{{ request|query(p=p) }}">{{ p }}</a></li>
+            {% endfor %}
+
+            {% if pager.last_page > pager.pages|length %}
+                <li class="disabled"><a href="#">...</a></li>
+                <li><a href="?{{ request|query(p=pager.last_page) }}">{{ pager.last_page }}</a></li>
+            {% endif %}
+           
+            {% if pager.next_page %} 
+                <li><a href="?{{ request|query(p=pager.next_page) }}">next</a></li>
+            {% else %}
+                <li class="disabled"><a href="#">next</a></li>
+            {% endif %}
+
+                <li><a href="?{{ request|query(p=pager.last_page) }}">last</a></li>
+            </ul>
+        </div>
+

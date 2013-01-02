@@ -1,0 +1,7 @@
+riak>=1.5.1
+riak-pb>=1.2.0,<1.3.0
+riakkit
+dateutil
+pytz
+jinja2
+protobuf
