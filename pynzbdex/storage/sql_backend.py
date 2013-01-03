@@ -1,6 +1,7 @@
-from sqlalchemy.ext.declarative import declarative_base, DeferredReflection
+from sqlalchemy.ext.declarative import (declarative_base, DeferredReflection,
+                                        declared_attr)
 from sqlalchemy.orm import relationship 
-from sqlalchemy import Column, Integer, String, Time
+from sqlalchemy import Column, Integer, String, DateTime
 
 
 Base = declarative_base(cls=DeferredReflection)
@@ -30,6 +31,6 @@ class Article(BaseMixin, Base):
     mesg_spec = Column(String, nullable=False)
     subject = Column(String, nullable=False)
     from_ = Column(String, nullable=False)
-    date = Column(Time, timezone='UTC')
+    date = Column(DateTime(timezone='UTC'), nullable=False)
     newsgroups = relationship(Group, secondary='newsgroups')
     file = relationship(File)
