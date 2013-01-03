@@ -14,7 +14,7 @@ import urllib
 from jinja2 import Template, Environment, PackageLoader
 
 from pynzbdex import storage, daemonweb_regex_helper as resolver
-storage.BACKEND = 'HTTP'
+storage.riak.BACKEND = 'HTTP'
 
 
 
@@ -80,7 +80,7 @@ class PagedResults(object):
             per_page = 100
         offset = (page - 1) * per_page
 
-        q = storage.Article.solrSearch(query, start=offset,
+        q = storage.riak.Article.solrSearch(query, start=offset,
                                        rows=per_page, sort=sort, wt='xml')
 
         total = q.length()
@@ -221,7 +221,7 @@ class PyNZBDexSearchArticle(PyNZBDexViewsBase):
         if query:
             cq = '%s AND %s' % (cq, query)
 
-        group = storage.Group.get(group_name)
+        group = storage.riak.Group.get(group_name)
         pager = PagedResults(cq, sort, page, per_page)
 
         return self.render({'results': pager.all(),
@@ -237,7 +237,7 @@ class PyNZBDexViewArticle(PyNZBDexViewsBase):
     def get(self, request, mesg_id, *args, **kwargs):
         delete = request.GET.get('delete', False)
 
-        article = storage.Article.get(mesg_id)
+        article = storage.riak.Article.get(mesg_id)
 
         if delete:
             article.delete()

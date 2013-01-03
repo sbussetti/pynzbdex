@@ -5,6 +5,7 @@ import pytz
 from riakkit import *
 import riak
 
+
 BACKEND = 'HTTP'
 #BACKEND = 'PBC'
 
@@ -120,6 +121,7 @@ class Article(DocBase):
     path = StringProperty()
     reply_to = StringProperty()
     sender = StringProperty()
+    user_agent = StringProperty()
     ## X-prefixed fields are variable..... try and keep on top of
     ## all of them, BUT, probably store them anyway?
     x_abuse_and_dmca_info = StringProperty()

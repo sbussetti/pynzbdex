@@ -96,8 +96,6 @@ class NNTPProxyClient(object):
     def _command(self, cmd, arg=None):
         ## sends a generic command to the server
         ## and receives response.
-        ## this has NO retry facility built in, (and it needs it)
-        
         
         ## SEND
         req = {u'CMD': cmd}
@@ -121,26 +119,29 @@ class NNTPProxyClient(object):
                 continue
 
             if len(sdata):
-                break
+                try:
+                    seq = json.loads(sdata)
+                except ValueError:
+                    log.error(sdata)
+                    raise
+                try:
+                    RSP = seq['RSP']
+                except KeyError:
+                    log.error(seq)
+                    raise
 
-        if not len(sdata):
-            raise Exception('server went away')
+                if RSP == 'OK':
+                    return seq.get('ARG', None)
+                else:
+                    #raise ValueError('nntp proxy sent bad response: %s' % seq['ARG'])
+                    log.error('nntp proxy sent bad response: %s' % seq['ARG'])
+                    ## retry the entire command..
+                    time.sleep(0.5)
+                    continue
 
-        try:
-            seq = json.loads(sdata)
-        except ValueError:
-            log.error(sdata)
-            raise
-        try:
-            RSP = seq['RSP']
-        except KeyError:
-            log.error(seq)
-            raise
+        ## if we've reached this point we failed
+        raise Exception('server went away')
 
-        if RSP == 'OK':
-            return seq.get('ARG', None)
-        else:
-            raise ValueError('nntp proxy sent bad response: %s' % seq['ARG'])
 
     def get_groups(self, prefix=None):
         d = {'prefix': prefix}

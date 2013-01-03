@@ -5,3 +5,6 @@ dateutil
 pytz
 jinja2
 protobuf
+redis>=2.7.2
+hiredis
+sqlalchemy=>0.8

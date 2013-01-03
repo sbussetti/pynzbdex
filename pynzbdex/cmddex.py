@@ -1,3 +1,6 @@
+## Command: Index.
+## Inserts NNTP header data into Riak document store
+
 from Queue import Empty, Full
 from multiprocessing import Process, Queue
 from collections import OrderedDict
@@ -23,7 +26,7 @@ def marshall_worker(func, kind, index, group, conf):
     if scanid in WORKERS:
         raise RuntimeError('Scanner ID collision: [%s]' % scanid)
 
-    if conf.get('resume', None):
+    if conf.get('resume', False):
         conf['offset'] = index * JOB_SIZE
         conf['max_processed'] = JOB_SIZE
     q = Queue()

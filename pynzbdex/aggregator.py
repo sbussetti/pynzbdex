@@ -8,10 +8,12 @@ import traceback
 import riak
 import dateutil.parser
 import iso8601
+from redis import StrictRedis
+import json
 
 from pynzbdex.pynntpcli import NNTPProxyClient
-from pynzbdex import storage
-storage.BACKEND = 'PBC'
+from pynzbdex import storage, settings
+storage.riak.BACKEND = 'PBC'
 
 
 logging.basicConfig(format='%(levelname)s: %(message)s')
@@ -19,6 +21,8 @@ log = logging.getLogger(__name__)
 log.setLevel('INFO')
 
 
+## TODO: move these to settings
+redis_indexbuckets = 1000
 nntp_chunksize = 1000
 riak_chunksize = 1000
 # when querying ranges, the max we'll span
@@ -85,11 +89,56 @@ class FakeRiakBucket(object):
 
 
 class Aggregator(object):
-    def __init__(self, *args, **kwargs):
-        ## this nicely handles all our reconnection bs for us.
-        ## or if it doesn't it will be patched to do so =)
-        ## I guess if we had args for the client they'd go in here..
-        self._cli = NNTPProxyClient()
+    def __init__(self, redis_pool=None, *args, **kwargs):
+        '''
+        this nicely handles all our reconnection bs for us.
+        or if it doesn't it will be patched to do so =)
+        I guess if we had args for the client they'd go in here..
+        '''
+        nntp_cfg = settings.NNTP_PROXY['default']
+        redis_cfg = settings.REDIS['default']
+
+        self._nntp = NNTPProxyClient(host=nntp_cfg['HOST'],
+                                     port=nntp_cfg['PORT'])
+
+        if redis_pool:
+            self._redis = StricRedis(connection_pool=redis_pool)
+        else:
+            self._redis = StrictRedis(host=redis_cfg['HOST'],
+                                      port=redis_cfg['PORT'],
+                                      db=redis_cfg['DB'])
+
+    def cache_article_to_redis(self, article_d):
+        '''
+        Given an article document, this constructs a new object
+        comprised of a small subset of fields.  A sister process
+        will be monitoring redis for new items in order to populate
+        the RDBMS with relational data.
+        '''
+        key = article_d.key
+        msg = json.dumps({
+                'from': article_d.from_,
+                'subject': article_d.subject,
+                'date': time.mktime(article_d.date.timetuple()),
+                'newsgroups': article_d.newsgroups,
+            })
+        self._redis.set(key, msg)
+        self._redis.sadd('newart:%s' % (hash(key) % redis_indexbuckets), key)
+        
+    def expire_article_to_redis(self, mesg_spec):
+        '''
+        The redis store (and subsequently the RDBMS) keys articles (correctly)
+        on the message spec.  This generates a simple "message" to Redis 
+        representing the intent that the item should be marked as deleted.
+        This is NOT expiring an item in redis but is instead sending a message
+        via the cache layer that it should be expired from the RDBMS.
+
+        (the whole redis layer is simply to prevent slowing down the
+        nntp indexer)
+        '''
+        self._redis.set(mesg_spec, 'EXPIRE')
+        self._redis.sadd('newart:%s' % (hash(mesg_spec) % redis_indexbuckets),
+                         mesg_spec)
 
     def delete_article_range(self, group_name, start, end, inclusive=False):
         log.info('Deleting articles (%s) [%s:(%s, %s)]' \
@@ -120,7 +169,7 @@ class Aggregator(object):
                 q = None
                 for i in range(0,5):
                     try:
-                        q = storage.Article.solrSearch(text_query,
+                        q = storage.riak.Article.solrSearch(text_query,
                                                        start=start_index,
                                                        rows=riak_chunksize)
                     except riak.RiakError:
@@ -145,8 +194,12 @@ class Aggregator(object):
                 ## delete docs
                 chunk_keys_deleted = 0
                 for ad in q.all():
-                    log.debug('Deleting article: %s' % ad.key)
+                    key = ad.key
+                    log.debug('Deleting article: %s' % key)
+
                     ad.delete()
+                    self.expire_article_to_redis(key)
+
                     chunk_keys_deleted += 1
 
                 keys_deleted += chunk_keys_deleted
@@ -189,14 +242,14 @@ class Aggregator(object):
         ## article ID..
 
         ## so this is just a list of groupnames from the NNTP server
-        groups = self._cli.get_groups(prefix)
+        groups = self._nntp.get_groups(prefix)
         nntp_groups = [g['group'] for g in groups]
 
         log.info('Invalidating groups, got %s groups from NNTP server' \
                     % len(nntp_groups))
         ## mr object already filters based on the prefix for the groups
         ## we want to invalidate. 
-        q = storage.Group.mapreduce()
+        q = storage.riak.Group.mapreduce()
         if prefix[-1] == '*': ## startswith
             p = prefix.rstrip('*')
             q.add_key_filters(riak.key_filter.starts_with(p))
@@ -213,18 +266,18 @@ class Aggregator(object):
         keys = []
         for k in dead_groups:
             log.info('Deleting group: %s' % k)
-            fro = FakeRiakObject(FakeRiakBucket(storage.Group.bucket_name), k, None)
-            storage.client.get_transport().delete(fro)
+            fro = FakeRiakObject(FakeRiakBucket(storage.riak.Group.bucket_name), k, None)
+            storage.riak.client.get_transport().delete(fro)
             keys.append(k)
         return keys
 
     def scrape_groups(self, prefix='alt.binaries.*'):
         ## updates our store of groups based on a prefix.
         log.info('Updating group store')
-        groups = self._cli.get_groups(prefix)
+        groups = self._nntp.get_groups(prefix)
         for group in groups:
             log.debug('Updating group: %s' % group['group'])
-            group_d = storage.Group.getOrNew(group['group'],
+            group_d = storage.riak.Group.getOrNew(group['group'],
                                             **{'first': group['first'],
                                                 'last': group['last'],
                                                 'flag': group['flag']})
@@ -233,11 +286,11 @@ class Aggregator(object):
             group_d.save()
 
     def scrape_articles(self, group_name, get_long_headers=False,
-                        invalidate=False, cached=True, offset=None,
+                        invalidate=False, cached=True, offset=0,
                         resume=False, max_processed=None):
         ## no idea what happens here if we pass an invalid groupname
-        group = self._cli.group(group_name)
-        group_d = storage.Group.getOrNew(group['group'],
+        group = self._nntp.group(group_name)
+        group_d = storage.riak.Group.getOrNew(group['group'],
                                         **{'count': group['count'],
                                             'first': group['first'],
                                             'last': group['last']})
@@ -249,12 +302,11 @@ class Aggregator(object):
         processed_articles = 0
         deleted_articles = 0
 
-        first = (group_d.last_stored if group_d.last_stored
-                                        and resume else group_d.first or 0)
-        if offset != None:
-            first += offset
+        first = (group_d.last_stored if resume 
+                                        and group_d.last_stored >= group_d.last
+                                     else group_d.first or 0)
+        first += offset
         last = group_d.last
-
         ## if we're up to date, or there was article loss on the 
         ## server since the last time we tried to get it.. 
         if first > group_d.last:
@@ -290,7 +342,7 @@ class Aggregator(object):
 
             log.debug('Get articles for %s between (%s, %s)' \
                         % (group_name, cursor_f, cursor_l))
-            articles = self._cli.get_group((cursor_f, cursor_l), group_name)
+            articles = self._nntp.get_group((cursor_f, cursor_l), group_name)
 
             ## increment..
             cursor_f += nntp_chunksize
@@ -334,7 +386,7 @@ class Aggregator(object):
                         'newsgroups': [group_name, ]
                     }
 
-                article_d = storage.Article.getOrNew(key)
+                article_d = storage.riak.Article.getOrNew(key)
                 has_bad_xref_tag = False
 
                 xref_bits = [a.strip().split(':', 1)
@@ -351,7 +403,7 @@ class Aggregator(object):
                 if has_bad_xref_tag:
                     log.error('>>>>>>> HAS BAD XREF TAG <<<<<<<')
                     article_d.delete()
-                    article_d = storage.Article(key)
+                    article_d = storage.riak.Article(key)
                 else:
                     log.debug('<<<<<<< XREF TAGS CLEAN >>>>>>>>')
 
@@ -378,7 +430,7 @@ class Aggregator(object):
                 if get_long_headers: ## this happens one at a time..
                     ## i wonder if getting by article # is any faster than
                     ## msgid?, or vice versa?
-                    long_headers = self._cli.get_header(key)
+                    long_headers = self._nntp.get_header(key)
 
                     ## oh fuck me long_headers are not 100% consistent
                     ## across posts
@@ -394,7 +446,7 @@ class Aggregator(object):
                         ## yes I know Riak can handle arbiatrary keys but right
                         ## now I want to KNOW if there's a field I don't know
                         ## about
-                        if not hasattr(storage.Article, key_d):
+                        if not hasattr(storage.riak.Article, key_d):
                             raise ValueError('New header field on Article doc:'
                                              ' %s' % key)
                         norm_headers[key_d] = long_headers[key]
@@ -428,6 +480,8 @@ class Aggregator(object):
                         break
                 if not saved:
                     raise Exception('Could not store to Riak')
+
+                self.cache_article_to_redis(article_d)
 
                 log.debug('Article %s updated' % key)
 
