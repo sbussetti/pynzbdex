@@ -20,5 +20,7 @@ DATABASE = {
         'USER' : 'pynzbdex',
         'PASS' : 'pynzbdex',
         'NAME' : 'pynzbdex',
+        'DIALECT' : 'mysql',
+        'DRIVER' : 'mysqldb',
     }
 }

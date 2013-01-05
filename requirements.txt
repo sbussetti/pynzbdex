@@ -8,3 +8,4 @@ protobuf
 redis>=2.7.2
 hiredis
 sqlalchemy=>0.8
+mysql-python>=1.2.4

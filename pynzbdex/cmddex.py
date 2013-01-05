@@ -13,9 +13,15 @@ JOB_SIZE = 10000
 WORKERS = {}
 
 
-def spawn_aggregator(q, i, *args, **kwargs):
+def spawn_scraper(q, i, *args, **kwargs):
     ag = aggregator.Aggregator()
     res = ag.scrape_articles(*args, **kwargs)
+    q.put(res)
+    del ag
+
+def spawn_processor(q, i, *args, **kwargs):
+    ag = aggregator.Aggregator()
+    res = ag.process_redis_cache(*args, **kwargs)
     q.put(res)
     del ag
 
@@ -30,7 +36,7 @@ def marshall_worker(func, kind, index, group, conf):
         conf['offset'] = index * JOB_SIZE
         conf['max_processed'] = JOB_SIZE
     q = Queue()
-    p = Process(target=spawn_aggregator,
+    p = Process(target=func,
                 args=(q, index, group),
                 kwargs=conf)
     proc = dict(q=q, p=p,
@@ -90,21 +96,26 @@ if __name__ == '__main__':
                         get_long_headers=False,
                         invalidate=True,
                         cached=True),
+        ## PROCESSORS (Different Signature)
+        redis_processor=dict(),
         )
 
-    roster = [  ('full_scan', 0),
-                ('cache_scan', 0),
-                ('resume_scan', 1),
-                ('invalidate_scan', 1),
-                ('quick_scan', 3), 
-                ('quick_invalidate_scan', 1), ]
+    ## TODO: fix crosscut between roster and scanner defns
+
+    roster = [  ('full_scan', spawn_scraper, 0),
+                ('cache_scan', spawn_scraper, 0),
+                ('resume_scan', spawn_scraper, 1),
+                ('invalidate_scan', spawn_scraper, 1),
+                ('quick_scan', spawn_scraper, 3), 
+                ('quick_invalidate_scan', spawn_scraper, 1), 
+                ('redis_processor', spawn_processor, 1), ]
     for group in ['alt.binaries.teevee', 'alt.binaries.dvd', ]:
-        for scanner, num_instances in roster:
+        for scanner_name, scanner, num_instances in roster:
             for i in xrange(0, num_instances):
-                conf = scanner_config[scanner].copy()
+                conf = scanner_config[scanner_name].copy()
                 
-                scanid, proc = marshall_worker(spawn_aggregator, scanner,
-                                                        i, group, conf)
+                scanid, proc = marshall_worker(scanner, scanner_name,
+                                               i, group, conf)
                 print 'Scanner [%s] started.' % scanid
 
         ## lets only do one group at a time for now,

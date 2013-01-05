@@ -130,10 +130,9 @@ class NNTPProxyClient(object):
                     log.error(seq)
                     raise
 
-                if RSP == 'OK':
+                if RSP in ['OK', 'ERR']:
                     return seq.get('ARG', None)
                 else:
-                    #raise ValueError('nntp proxy sent bad response: %s' % seq['ARG'])
                     log.error('nntp proxy sent bad response: %s' % seq['ARG'])
                     ## retry the entire command..
                     time.sleep(0.5)
@@ -141,7 +140,6 @@ class NNTPProxyClient(object):
 
         ## if we've reached this point we failed
         raise Exception('server went away')
-
 
     def get_groups(self, prefix=None):
         d = {'prefix': prefix}

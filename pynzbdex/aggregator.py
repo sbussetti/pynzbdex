@@ -10,6 +10,9 @@ import dateutil.parser
 import iso8601
 from redis import StrictRedis
 import json
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import DeferredReflection
 
 from pynzbdex.pynntpcli import NNTPProxyClient
 from pynzbdex import storage, settings
@@ -89,24 +92,46 @@ class FakeRiakBucket(object):
 
 
 class Aggregator(object):
+    __nntp = None
+    __redis = None
+    __sql = None
+
     def __init__(self, redis_pool=None, *args, **kwargs):
         '''
-        this nicely handles all our reconnection bs for us.
+        all connectors should nicely handle all our reconnection bs for us.
         or if it doesn't it will be patched to do so =)
-        I guess if we had args for the client they'd go in here..
+        I guess if we had args for the clients they'd go in here..
         '''
-        nntp_cfg = settings.NNTP_PROXY['default']
-        redis_cfg = settings.REDIS['default']
+        pass
 
-        self._nntp = NNTPProxyClient(host=nntp_cfg['HOST'],
-                                     port=nntp_cfg['PORT'])
+    @property
+    def _nntp(self):
+        if not self.__nntp:
+            nntp_cfg = settings.NNTP_PROXY['default']
+            self.__nntp = NNTPProxyClient(host=nntp_cfg['HOST'],
+                                          port=nntp_cfg['PORT'])
+        return self.__nntp
 
-        if redis_pool:
-            self._redis = StricRedis(connection_pool=redis_pool)
-        else:
-            self._redis = StrictRedis(host=redis_cfg['HOST'],
-                                      port=redis_cfg['PORT'],
-                                      db=redis_cfg['DB'])
+    @property
+    def _redis(self):
+        if not self.__redis:
+            redis_cfg = settings.REDIS['default']
+            self.__redis = StrictRedis(host=redis_cfg['HOST'],
+                                       port=redis_cfg['PORT'],
+                                       db=redis_cfg['DB'])
+        return self.__redis
+
+    @property
+    def _sql(self):
+        if not self.__sql:
+            sql_cfg = settings.DATABASE['default']
+            dsn = '%(DIALECT)s+%(DRIVER)s://%(USER)s:%(PASS)s@%(HOST)s:%(PORT)s/%(NAME)s' % sql_cfg
+            sql_engine = create_engine(dsn)
+            storage.sql.Base.metadata.create_all(sql_engine)
+            DeferredReflection.prepare(sql_engine)
+            Session = sessionmaker(bind=sql_engine)
+            self.__sql = Session()
+        return self.__sql
 
     def cache_article_to_redis(self, article_d):
         '''
@@ -117,7 +142,7 @@ class Aggregator(object):
         '''
         key = article_d.key
         msg = json.dumps({
-                'from': article_d.from_,
+                'from_': article_d.from_,
                 'subject': article_d.subject,
                 'date': time.mktime(article_d.date.timetuple()),
                 'newsgroups': article_d.newsgroups,
@@ -501,3 +526,77 @@ class Aggregator(object):
                     'processed': processed_articles,
                     'last_message_id': previous_article_num, }
 
+    def process_redis_cache(self, *args, **kwargs):
+        ## this reads the redis cache and stores the resulting
+        ## message buckets to the RDBMS -- it's decoupled
+        ## through redis with the assumption that this will
+        ## be run from a separate thread or process than
+        ## the article scraper.
+
+        log.info('PROCESSING REDIS CACHE')
+        ## fuck you sqlalchemy.  So Session is fucking code for secret
+        ## transaction?  Seriously fuck youuuu.
+        GROUPS = {}
+        PROCESSED_MESSAGES = {}
+
+        total_processed = 0
+        total_updated = 0
+        total_expired = 0
+        for b in xrange(0, redis_indexbuckets):
+            set_key = 'newart:%s' % b
+            log.debug('PROCESSING REDIS BUCKET: %s' % set_key)
+            try:
+                for mesg_spec in self._redis.smembers(set_key):
+                    art_msg = self._redis.get(mesg_spec)
+                    ## our sets persist longer than our keys
+                    if art_msg:
+                        if art_msg.startswith('EXPIRE'):
+                            log.debug('EXPIRED FROM RDBMS: %s' % mesg_spec)
+                            storage.sql.get_and_delete(self._sql, storage.sql.Article,
+                                                       mesg_spec=mesg_spec)
+                            total_expired += 1
+                        else:
+                            log.debug('UPDATED TO RDBMS: %s' % mesg_spec)
+                            art_obj = json.loads(art_msg)
+                            ##temp (from -> from_)
+                            art_obj.update({'mesg_spec': mesg_spec})
+                            art_obj['date'] = datetime.fromtimestamp(int(art_obj['date']))
+                            group_names = art_obj.pop('newsgroups')
+
+                            article = storage.sql.get_or_create(self._sql,
+                                                                storage.sql.Article,
+                                                                **art_obj)
+                            for group_name in group_names:
+                                group = GROUPS.get(group_name, None)
+                                if not group:
+                                    group = storage.sql.get_or_create(self._sql,
+                                                                      storage.sql.Group,
+                                                                      name=group_name)
+                                    GROUPS[group_name] = group
+                                article.groups.append(group)
+                            try:
+                                PROCESSED_MESSAGES[set_key].append(mesg_spec)
+                            except KeyError:
+                                PROCESSED_MESSAGES[set_key] = [mesg_spec, ]
+                            total_updated += 1
+                    total_processed += 1
+            except:
+                log.error(traceback.format_exc())
+                ## SQA Session rollsback here
+            else:
+                ## SQA rolls back, like a dick, so only clear
+                ## redis if we got out cleanly
+                for set_key, specs in PROCESSED_MESSAGES.iteritems():
+                    self._redis.srem(set_key, mesg_spec)
+                    for mesg_spec in specs:
+                        self._redis.delete(mesg_spec)
+            finally:
+                ## flush at the end of every bucket.
+                log.debug('COMMIT TO RDBMS')
+                self._sql.commit()
+                ## once I understand redis piplining this can be further
+                ## optimized
+        return {'total_processed': total_processed,
+                'total_updated': total_updated,
+                'total_expired': total_expired}
+         
