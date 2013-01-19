@@ -105,9 +105,9 @@ if __name__ == '__main__':
     roster = [  ('full_scan', spawn_scraper, 0),
                 ('cache_scan', spawn_scraper, 0),
                 ('resume_scan', spawn_scraper, 1),
-                ('invalidate_scan', spawn_scraper, 1),
-                ('quick_scan', spawn_scraper, 3), 
-                ('quick_invalidate_scan', spawn_scraper, 1), 
+                ('invalidate_scan', spawn_scraper, 0),
+                ('quick_scan', spawn_scraper, 1), 
+                ('quick_invalidate_scan', spawn_scraper, 0), 
                 ('redis_processor', spawn_processor, 1), ]
     for group in ['alt.binaries.teevee', 'alt.binaries.dvd', ]:
         for scanner_name, scanner, num_instances in roster:
@@ -134,7 +134,7 @@ if __name__ == '__main__':
 
                     ## Keep sayin / Live Forever
                     ## as long as there's still articles to scrape
-                    if LIVE_FOREVER and res.get('processed', 0):
+                    if LIVE_FOREVER:# and res.get('processed', 0):
                         scanid, proc = marshall_worker(*proc['args'].values())
                         print 'Scanner [%s] started.' % scanid
                     ## the proc died, but it did so cleanly, so continue to next

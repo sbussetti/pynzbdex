@@ -78,8 +78,8 @@ class Article(DocBase):
     ## CONTROL METADATA
     #__short_headers = BooleanProperty(default=True)
     # short headers are required so this is implicit
-    _long_headers = BooleanProperty(default=False)
-    _body = BooleanProperty(default=False)
+    nn_long_headers = BooleanProperty(default=False)
+    nn_body = BooleanProperty(default=False)
 
     ## SHORT HEADERS
     ## implicitly this is the key.

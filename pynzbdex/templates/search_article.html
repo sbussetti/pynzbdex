@@ -19,7 +19,7 @@
 
 <div class="row-fluid">
     <div class="span12">
-        <h4>Displaying {{ pager.current_offset }} to {{ pager.next_offset }} of {{ pager.total }} articles</h4>
+        <h4>Displaying {{ pager.current_offset }} to {{ pager.next_offset or pager.total }} of {{ pager.total }} articles</h4>
     </div>
 </div>
 

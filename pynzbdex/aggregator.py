@@ -443,7 +443,7 @@ class Aggregator(object):
                             ### if we got asked for long headers and they're
                             ### not in the cache, still a miss
                             ### else continue..
-                            (get_long_headers and not article_d._long_headers)
+                            (get_long_headers and not article_d.nn_long_headers)
                         ):
                         log.debug('Article %s already cached' % key)
                         continue
@@ -491,7 +491,7 @@ class Aggregator(object):
                         norm_headers['bytes_'] = long_headers['bytes']
                     ## flag that we've collected all the headers
                     ## there are.
-                    norm_headers['_long_headers'] = True
+                    norm_headers['nn_long_headers'] = True
 
                 ## save out and increment
                 article_d.mergeData(norm_headers)
@@ -559,13 +559,16 @@ class Aggregator(object):
                             log.debug('UPDATED TO RDBMS: %s' % mesg_spec)
                             art_obj = json.loads(art_msg)
                             ##temp (from -> from_)
-                            art_obj.update({'mesg_spec': mesg_spec})
                             art_obj['date'] = datetime.fromtimestamp(int(art_obj['date']))
                             group_names = art_obj.pop('newsgroups')
 
                             article = storage.sql.get_or_create(self._sql,
                                                                 storage.sql.Article,
-                                                                **art_obj)
+                                                                mesg_spec=mesg_spec,
+                                                                defaults=art_obj)
+                            for k, v in art_obj.items():
+                                setattr(article, k, v)
+
                             for group_name in group_names:
                                 group = GROUPS.get(group_name, None)
                                 if not group:
@@ -596,7 +599,7 @@ class Aggregator(object):
                 self._sql.commit()
                 ## once I understand redis piplining this can be further
                 ## optimized
-        return {'total_processed': total_processed,
-                'total_updated': total_updated,
-                'total_expired': total_expired}
+        return {'processed': total_processed,
+                'updated': total_updated,
+                'deleted': total_expired}
          

@@ -1,6 +1,6 @@
         <div class="pagination pagination-right pagination-small">
             <ul>
-                <li><a href="?{{ request|query(p=0) }}">first</a></li>
+                <li><a href="?{{ request|query(p=1) }}">first</a></li>
                 {% if pager.prev_page %} 
                 <li><a href="?{{ request|query(p=pager.prev_page) }}">prev</a></li>
                 {% else %}

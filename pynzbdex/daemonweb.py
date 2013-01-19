@@ -12,8 +12,11 @@ import copy
 import urllib
 
 from jinja2 import Template, Environment, PackageLoader
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.declarative import DeferredReflection
 
-from pynzbdex import storage, daemonweb_regex_helper as resolver
+from pynzbdex import storage, daemonweb_regex_helper as resolver, settings
 storage.riak.BACKEND = 'HTTP'
 
 
@@ -21,6 +24,8 @@ storage.riak.BACKEND = 'HTTP'
 logging.basicConfig(format='%(levelname)s: %(message)s')
 log = logging.getLogger(__name__)
 log.setLevel('DEBUG')
+
+logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 
 ##################
@@ -80,10 +85,12 @@ class PagedResults(object):
             per_page = 100
         offset = (page - 1) * per_page
 
-        q = storage.riak.Article.solrSearch(query, start=offset,
-                                       rows=per_page, sort=sort, wt='xml')
+        #q = storage.riak.Article.solrSearch(query, start=offset,
+        #                               rows=per_page, sort=sort, wt='xml')
+        #total = q.length()
+        q = query.order_by()
+        total = q.count()
 
-        total = q.length()
         prev_offset = offset - per_page
         next_offset = offset + per_page
         current_offset = offset + 1
@@ -127,7 +134,9 @@ class PagedResults(object):
         self.pages = pages
 
     def all(self):
-        return self.q.all()
+        #return self.q.all()
+        for aref in self.q[self.offset:(self.offset + self.per_page)]:
+            yield storage.riak.Article.get(aref.mesg_spec)
 
 
 class ImmutableObject(object):
@@ -163,6 +172,14 @@ class PyNZBRequest(ImmutableObject):
 #################
 
 class PyNZBDexViewsBase(object):
+    def __init__(self, *args, **kwargs):
+        sql_cfg = settings.DATABASE['default']
+        dsn = '%(DIALECT)s+%(DRIVER)s://%(USER)s:%(PASS)s@%(HOST)s:%(PORT)s/%(NAME)s' % sql_cfg
+        sql_engine = create_engine(dsn)
+        DeferredReflection.prepare(sql_engine)
+        Session = sessionmaker(bind=sql_engine)
+        self._sql = Session() 
+
     def dispatch(self, request, *args, **kwargs):
         methods = ['GET', 'POST']
 
@@ -216,12 +233,20 @@ class PyNZBDexSearchArticle(PyNZBDexViewsBase):
         sort = request.GET.get('s', 'date desc')
         page = int(request.GET.get('p', 1) or 1)
         per_page = int(request.GET.get('pp', 25) or 25)
+        source = request.GET.get('src', 'sql')
 
-        cq = "newsgroups:'%s'" % group_name
-        if query:
-            cq = '%s AND %s' % (cq, query)
-
+        #cq = "newsgroups:'%s'" % group_name
+        #if query:
+        #    cq = '%s AND %s' % (cq, query)
         group = storage.riak.Group.get(group_name)
+
+        #group = storage.sql.get(self._sql, storage.sql.Group,
+        #                        name=group_name)
+
+        cq = self._sql.query(storage.sql.Article).filter(
+                            storage.sql.Article.groups.any(name=group_name), )
+
+
         pager = PagedResults(cq, sort, page, per_page)
 
         return self.render({'results': pager.all(),
@@ -275,7 +300,8 @@ def keys(data):
 def url(name, *args, **kwargs):
     return url_reverse(name, *args, **kwargs)
 
-templates = Environment(loader=PackageLoader('pynzbdex', 'templates'))
+templates = Environment(loader=PackageLoader('pynzbdex', 'templates'),
+                        autoescape=True)
 templates.filters.update({
         'date': date,
         'age': age,

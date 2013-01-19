@@ -14,12 +14,13 @@ class MultipleFoundError(Exception):
     pass
 
 
-def get_or_create(session, model, **kwargs):
+def get_or_create(session, model, defaults={}, **kwargs):
     '''get a single object or create if it does not exist'''
     try:
         instance = get(session, model, **kwargs)
     except NotFoundError:
-        instance = model(**kwargs)
+        ckwargs = dict(defaults, **kwargs)
+        instance = model(**ckwargs)
         session.add(instance)
     return instance
 
@@ -70,7 +71,7 @@ group_articles = Table('group_articles', Base.metadata,
 
 
 class Group(Base):
-    name = Column(String(length=255), nullable=False)
+    name = Column(String(length=255), nullable=False, unique=True)
 
 
 class File(Base):
@@ -79,7 +80,7 @@ class File(Base):
 
 
 class Article(Base):
-    mesg_spec = Column(String(length=255), nullable=False)
+    mesg_spec = Column(String(length=255), nullable=False, unique=True)
     subject = Column(String(length=511), nullable=False)
     from_ = Column(String(length=255), nullable=False)
     date = Column(DateTime(timezone='UTC'), nullable=False)
