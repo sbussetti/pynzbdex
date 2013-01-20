@@ -5,6 +5,8 @@ import pytz
 from riakkit import *
 import riak
 
+from pynzbdex import settings
+
 
 BACKEND = 'HTTP'
 #BACKEND = 'PBC'
@@ -17,10 +19,12 @@ class ClientWrapper(object):
         ## this might be hacky, but it does stuff to the connection
         ## during the metaclass setup, which sucks.
         if self._cw_client is None or self._cw_backend != BACKEND:
+            host = settings.RIAK['default']['HOST']
             if BACKEND == 'PBC':
-                self._cw_client = riak.RiakClient(port=8087, transport_class=riak.RiakPbcTransport)
+                self._cw_client = riak.RiakClient(host=host, port=8087,
+                                        transport_class=riak.RiakPbcTransport)
             else:
-                self._cw_client = riak.RiakClient()
+                self._cw_client = riak.RiakClient(host=host)
             self._cw_backend = BACKEND
         return self._cw_client
 
