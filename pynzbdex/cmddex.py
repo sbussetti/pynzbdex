@@ -1,5 +1,6 @@
 ## Command: Index.
 ## Inserts NNTP header data into Riak document store
+import logging
 import sys
 import argparse
 from Queue import Empty, Full
@@ -127,11 +128,16 @@ if __name__ == '__main__':
     aparser = argparse.ArgumentParser(description='commandline nntp indexer')
     aparser.add_argument('groups', metavar='GROUP', type=str, nargs='+',
                    help='groups to work on')
+    aparser.add_argument('--loglevel', metavar='LEVEL', type=str,
+                   choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                   default='ERROR', help='verbosity level of logging facility')
     for sc in scanner_config.keys():
         aparser.add_argument('--%s' % sc, metavar='N', type=int, default=0,
                        help='number of %s scanners to spawn' % sc)
 
     args = aparser.parse_args()
+
+    logging.basicConfig(format='%(levelname)s:(%(name)s.%(funcName)s) %(message)s', level=args.loglevel)
     
     roster = []
     for group in args.groups:

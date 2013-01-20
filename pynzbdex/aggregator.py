@@ -21,9 +21,7 @@ from pynzbdex import storage, settings
 storage.riak.BACKEND = 'PBC'
 
 
-logging.basicConfig(format='%(levelname)s: %(message)s')
 log = logging.getLogger(__name__)
-log.setLevel('INFO')
 
 
 ## TODO: move these to settings
@@ -726,7 +724,7 @@ class Aggregator(object):
                         log.debug('OUT [%s]' % subject)
                         continue
 
-                log.debug('Found <<<%s>>> (%s/%s)' % (name, part, parts))
+                log.info('Found <<<%s>>> (%s/%s)' % (name, part, parts))
 
                 ## update the article w/ its part number
                 if article.part != part:
@@ -776,6 +774,7 @@ class Aggregator(object):
 
                 #flush every 100 records
                 if not (offset % 100):
+                    log.debug('FLUSH')
                     self._sql.commit()
 
                 stats['updated'] += 1
