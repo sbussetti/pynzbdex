@@ -562,6 +562,8 @@ class Aggregator(object):
                             ## this should check if the File (if any) associated
                             ## with this thing still has any other assocated records
                             ## and delete it if not
+                            #file_rec = 
+
                             storage.sql.get_and_delete(self._sql, storage.sql.Article,
                                                        mesg_spec=mesg_spec)
                             total_expired += 1
