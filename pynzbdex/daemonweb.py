@@ -202,6 +202,7 @@ class PyNZBDexViewsBase(object):
 
     def storage_teardown(self):
         if self._sql:
+            self._sql.commit()
             self._sql.close() 
 
     def dispatch(self, request, *args, **kwargs):
