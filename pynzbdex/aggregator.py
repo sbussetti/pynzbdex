@@ -609,8 +609,8 @@ class Aggregator(object):
                         self._redis.srem(set_key, mesg_spec)
 
                     total_processed += 1
-                    if not (total_processed % 500):
-                        ## flush every 500 records
+                    if not (total_processed % 100):
+                        ## flush every 100 records
                         for set_key, specs in PROCESSED_MESSAGES.iteritems():
                             for mesg_spec in specs:
                                 self._redis.srem(set_key, mesg_spec)
@@ -774,7 +774,8 @@ class Aggregator(object):
                 for k, v in mutator.items():
                     setattr(file_rec, k, v)
 
-                if not (offset % 500):
+                #flush every 100 records
+                if not (offset % 100):
                     self._sql.commit()
 
                 stats['updated'] += 1
