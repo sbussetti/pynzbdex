@@ -316,7 +316,7 @@ class PyNZBDexViewFile(PyNZBDexViewsBase):
         file_rec = storage.sql.get(self._sql, storage.sql.File, id=id)
 
         if delete:
-            file_rec.delete()
+            self._sql.delete(file_rec)
 
         return self.render({'request': request,
                             'file': file_rec})

@@ -562,10 +562,16 @@ class Aggregator(object):
                             ## this should check if the File (if any) associated
                             ## with this thing still has any other assocated records
                             ## and delete it if not
-                            #file_rec = 
+                            deleted_article = storage.sql.get_and_delete(self._sql,
+                                                        storage.sql.Article,
+                                                        mesg_spec=mesg_spec)
 
-                            storage.sql.get_and_delete(self._sql, storage.sql.Article,
-                                                       mesg_spec=mesg_spec)
+                            if deleted_article:
+                                file_rec = deleted_article.file
+                                if file_rec.articles.count() == 0:
+                                    log.info('LAST ARTICLE, DELETING FILE: %s' % file.subject)
+                                    self._sql.delete(file_rec)
+
                             total_expired += 1
                         else:
                             log.debug('UPDATED TO RDBMS: %s' % mesg_spec)
@@ -580,6 +586,7 @@ class Aggregator(object):
                                                                 defaults=art_obj)
                             for k, v in art_obj.items():
                                 setattr(article, k, v)
+                            #article.update(art_obj)
 
                             for group_name in group_names:
                                 group = GROUPS.get(group_name, None)
@@ -590,15 +597,27 @@ class Aggregator(object):
                                     GROUPS[group_name] = group
                                 if not article.newsgroups.filter_by(id=group.id).count():
                                     article.newsgroups.append(group) 
-                            try:
-                                PROCESSED_MESSAGES[set_key].append(mesg_spec)
-                            except KeyError:
-                                PROCESSED_MESSAGES[set_key] = [mesg_spec, ]
                             total_updated += 1
+
+                        try:
+                            PROCESSED_MESSAGES[set_key].append(mesg_spec)
+                        except KeyError:
+                            PROCESSED_MESSAGES[set_key] = [mesg_spec, ]
+
                     else:
                         ## clean up my mistakes
                         self._redis.srem(set_key, mesg_spec)
+
                     total_processed += 1
+                    if not (total_processed % 500):
+                        ## flush every 500 records
+                        for set_key, specs in PROCESSED_MESSAGES.iteritems():
+                            for mesg_spec in specs:
+                                self._redis.srem(set_key, mesg_spec)
+                                self._redis.delete(mesg_spec)
+                        ## flush at the end of every bucket.
+                        log.debug('COMMIT TO RDBMS')
+                        self._sql.commit()
             except:
                 log.error(traceback.format_exc())
                 ## SQA Session rollsback here
@@ -609,7 +628,6 @@ class Aggregator(object):
                     for mesg_spec in specs:
                         self._redis.srem(set_key, mesg_spec)
                         self._redis.delete(mesg_spec)
-            finally:
                 ## flush at the end of every bucket.
                 log.debug('COMMIT TO RDBMS')
                 self._sql.commit()
@@ -724,29 +742,37 @@ class Aggregator(object):
                                 from_=article.from_, subject=name)
                 except storage.sql.NotFoundError:
                     file_rec = storage.sql.File(subject=name,
-                                                from_=article.from_)
+                                                from_=article.from_,
+                                                date=article.date,
+                                                parts=parts)
+                    ## must be in session before we add related items..
+                    self._sql.add(file_rec)
 
                 ## stats
+                mutator = {}
+
                 if not file_rec.date or file_rec.date < article.date:
-                    file_rec.date = article.date
+                    mutator['date'] = article.date
 
                 if not file_rec.parts or file_rec.parts < parts:
-                    file_rec.parts = parts
+                    mutator['parts'] = parts
 
-                file_rec.bytes_ =+ article.bytes_
-
-                ## must be in session before we add related items..
-                self._sql.add(file_rec)
+                if not file_rec.articles.filter_by(id=article.id).count():
+                    mutator['bytes'] = file_rec.bytes_ + article.bytes_
+                    mutator['article'] = article
 
                 ## relations
                 for group in article.newsgroups:
                     if not file_rec.newsgroups.filter_by(id=group.id).count():
                         file_rec.newsgroups.append(group)
-                file_rec.articles.append(article)
 
                 ## rollup
                 if file_rec.articles.count() == parts:
-                    file_rec.complete = True
+                    mutator['complete'] = True
+
+                #file_rec.update(mutator)
+                for k, v in mutator.items():
+                    setattr(file_rec, k, v)
 
                 if not (offset % 500):
                     self._sql.commit()

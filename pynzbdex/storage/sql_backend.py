@@ -32,6 +32,7 @@ def get_and_delete(session, model, *args, **kwargs):
         pass
     else:
         session.delete(instance)
+        return instance
 
 
 def get(session, model, *args, **kwargs):
