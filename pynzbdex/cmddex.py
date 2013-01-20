@@ -1,6 +1,7 @@
 ## Command: Index.
 ## Inserts NNTP header data into Riak document store
-
+import sys
+import argparse
 from Queue import Empty, Full
 from multiprocessing import Process, Queue
 from collections import OrderedDict
@@ -22,6 +23,12 @@ def spawn_scraper(q, i, *args, **kwargs):
 def spawn_processor(q, i, *args, **kwargs):
     ag = aggregator.Aggregator()
     res = ag.process_redis_cache(*args, **kwargs)
+    q.put(res)
+    del ag
+
+def spawn_grouper(q, i, *args, **kwargs):
+    ag = aggregator.Aggregator()
+    res = ag.group_articles(*args, **kwargs)
     q.put(res)
     del ag
 
@@ -65,56 +72,80 @@ if __name__ == '__main__':
     ## For now this list is hard coded. But would be based on
     ## each group object's Active flag.
     scanner_config = dict(
-        full_scan=dict( 
+        full_scan=[spawn_scraper,
+                        dict( 
                         resume=False,
                         get_long_headers=True,
                         invalidate=True,
-                        cached=False),
-        cache_scan=dict(
+                        cached=False)],
+        cache_scan=[spawn_scraper,
+                        dict(
                         resume=False,
                         get_long_headers=True,
                         invalidate=True,
-                        cached=True),
-        resume_scan=dict(
+                        cached=True)],
+        resume_scan=[spawn_scraper,
+                        dict(
                         resume=True,
                         get_long_headers=True,
                         invalidate=False,
-                        cached=True),
+                        cached=True)],
         ## SHORT HEADERS ONLY
-        invalidate_scan=dict(
+        invalidate_scan=[spawn_scraper,
+                        dict(
                         resume=False,
                         get_long_headers=False,
                         invalidate=True,
-                        cached=True),
-        quick_scan=dict(
+                        cached=True)],
+        quick_scan=[spawn_scraper,
+                        dict(
                         resume=True,
                         get_long_headers=False,
                         invalidate=False,
-                        cached=True),
-        quick_invalidate_scan=dict(
+                        cached=True)],
+        quick_invalidate_scan=[spawn_scraper,
+                        dict(
                         resume=True,
                         get_long_headers=False,
                         invalidate=True,
-                        cached=True),
+                        cached=True)],
         ## PROCESSORS (Different Signature)
-        redis_processor=dict(),
+        redis_processor=[spawn_processor,
+                        dict()],
+        article_grouper=[spawn_grouper,
+                        dict(
+                        full_scan=False,
+                        complete_only=False
+                        )],
+        full_article_grouper=[spawn_grouper,
+                        dict(
+                        full_scan=True,
+                        complete_only=False
+                        )],
         )
+    ## options
+    aparser = argparse.ArgumentParser(description='commandline nntp indexer')
+    aparser.add_argument('groups', metavar='GROUP', type=str, nargs='+',
+                   help='groups to work on')
+    for sc in scanner_config.keys():
+        aparser.add_argument('--%s' % sc, metavar='N', type=int, default=0,
+                       help='number of %s scanners to spawn' % sc)
 
-    ## TODO: fix crosscut between roster and scanner defns
+    args = aparser.parse_args()
+    
+    roster = []
+    for group in args.groups:
+        for scanner_name, scanner in scanner_config.items():
+            scan_func, scan_config = scanner
+            num_instances = getattr(args, scanner_name)
 
-    roster = [  ('full_scan', spawn_scraper, 0),
-                ('cache_scan', spawn_scraper, 0),
-                ('resume_scan', spawn_scraper, 1),
-                ('invalidate_scan', spawn_scraper, 0),
-                ('quick_scan', spawn_scraper, 1), 
-                ('quick_invalidate_scan', spawn_scraper, 0), 
-                ('redis_processor', spawn_processor, 1), ]
-    for group in ['alt.binaries.teevee', 'alt.binaries.dvd', ]:
-        for scanner_name, scanner, num_instances in roster:
+            ## doesn't really get used anymore.. perhaps
+            ## a final report @ some point? or tui visualization..
+            roster.append((scanner_name, scan_func, num_instances))
+
             for i in xrange(0, num_instances):
-                conf = scanner_config[scanner_name].copy()
-                
-                scanid, proc = marshall_worker(scanner, scanner_name,
+                conf = scan_config.copy()
+                scanid, proc = marshall_worker(scan_func, scanner_name,
                                                i, group, conf)
                 print 'Scanner [%s] started.' % scanid
 

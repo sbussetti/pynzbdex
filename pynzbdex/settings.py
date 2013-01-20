@@ -1,6 +1,6 @@
 REDIS = {
     'default' : {
-        'HOST' : 'localhost',
+        'HOST' : 'sol-serv',
         'PORT' : 6379,
         'DB' : 1
     }
@@ -8,14 +8,14 @@ REDIS = {
 
 NNTP_PROXY = {
     'default' : {
-        'HOST' : 'localhost',
+        'HOST' : 'sol-serv',
         'PORT' : 1701
     }
 }
 
 DATABASE = {
     'default' : {
-        'HOST' : 'localhost',
+        'HOST' : 'sol-serv',
         'PORT' : 3306,
         'USER' : 'pynzbdex',
         'PASS' : 'pynzbdex',

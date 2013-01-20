@@ -10,16 +10,16 @@
     <div class="group_info span6">
         <h5>{{ group.key }} index completion: </h5>
         <div class="progress progress-striped">
-          <div class="bar bar-info" style="width: {{ '%d'|format((group.first / group.last) * 100) }}%;"></div>
-          <div class="bar bar-success" style="width: {{ '%d'|format(((group.last_stored - group.first) / group.last) * 100) }}%;"></div>
-          <div class="bar bar-warning" style="width: {{ '%d'|format(((group.last - group.last_stored) / group.last) * 100) }}%;"></div>
+          <div class="bar bar-info" style="width: {{ '%d'|format((group.first / group.last) * 100) }}%;">{{ group.first }}</div>
+          <div class="bar bar-success" style="width: {{ '%d'|format(((group.last_stored - group.first) / group.last) * 100) }}%;">{{ group.last_stored }}</div>
+          <div class="bar bar-warning" style="width: {{ '%d'|format(((group.last - group.last_stored) / group.last) * 100) }}%;">{{ group.last }}</div>
         </div>
     </div>
 </div>
 
 <div class="row-fluid">
     <div class="span12">
-        <h4>Displaying {{ pager.current_offset }} to {{ pager.next_offset or pager.total }} of {{ pager.total }} articles</h4>
+        <h4>Displaying {{ pager.current_offset }} to {{ pager.next_offset or pager.total }} of {{ pager.total }} {{ doctype }}s</h4>
     </div>
 </div>
 
@@ -42,8 +42,8 @@
                     </div>
                     <div class="right">
                         <ul class="sort unstyled">
-                            <li><a href="/search/articles/{{ group.key }}/?{{ request|query(sort='size asc') }}">&#x21D1;</a></li>
-                            <li><a href="/search/articles/{{ group.key }}/?{{ request|query(sort='size desc') }}">&#x21D3;</a></li>
+                            <li><a href="?{{ request|query(sort='size asc') }}">&#x21D1;</a></li>
+                            <li><a href="?{{ request|query(sort='size desc') }}">&#x21D3;</a></li>
                         </ul>
                     </div>
                 </div>
@@ -80,16 +80,33 @@
             {% for res in results %}
             <div class="table-row">
                 <div class="cell">
-                    ({{ res.bytes_|human_size }})
+                    ({{ res.bytes_|humansize }})
                 </div>
                 <div class="cell">
                     <div>
+                        {% if doctype == 'article' %}
                         <a href="{{ 'article_view'|url(res.key) }}">{{ res.subject }}</a>
+                        {% elif doctype == 'file' %}
+                        <a href="{{ 'file_view'|url(res.key) }}">{{ res.subject }}</a>
+                        {% elif doctype == 'report' %}
+                        NOT IMPLEMENTED
+                        {% endif %}
                     </div>
                     <div>
                     {% for g in res.newsgroups %}
-                        <a href="{{ 'article_search'|url(g) }}">{{ g }}</a>
+                        <a href="{{ 'article_search'|url(doctype, g) }}">{{ g }}</a>
                     {% endfor %}
+                    </div>
+                    <div>
+                    {% if doctype == 'article' %}
+
+                    {% elif doctype == 'file' %}
+                        {% if not res.complete %}
+                        <span class="label label-important">This File is Incomplete</span>
+                        {% endif %}
+                    {% elif doctype == 'report' %}
+                    NOT IMPLEMENTED
+                    {% endif %}
                     </div>
                 </div>
                 <div class="cell">

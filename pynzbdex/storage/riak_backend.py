@@ -112,8 +112,10 @@ class Article(DocBase):
     ## crossposted... so this has to be done via the Solr-like search based on
     ## the xref_message_ids tags.
 
+    code = StringProperty()
     content_transfer_encoding = StringProperty()
     content_type = StringProperty()
+    message = StringProperty()
     mime_version = StringProperty()
     nntp_posting_date = StringProperty()
     nntp_posting_host = StringProperty()
@@ -125,6 +127,7 @@ class Article(DocBase):
     ## X-prefixed fields are variable..... try and keep on top of
     ## all of them, BUT, probably store them anyway?
     x_abuse_and_dmca_info = StringProperty()
+    x_antivirus = StringProperty()
     x_complaints_info = StringProperty()
     x_complaints_to = StringProperty()
     x_dmca_complaints_to = StringProperty()

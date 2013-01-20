@@ -11,7 +11,7 @@
                 <li class="{% if p == pager.current_page %}active{% endif %}"><a href="?{{ request|query(p=p) }}">{{ p }}</a></li>
             {% endfor %}
 
-            {% if pager.last_page > pager.pages|length %}
+            {% if pager.last_page > pager.pages|last %}
                 <li class="disabled"><a href="#">...</a></li>
                 <li><a href="?{{ request|query(p=pager.last_page) }}">{{ pager.last_page }}</a></li>
             {% endif %}

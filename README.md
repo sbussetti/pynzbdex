@@ -38,3 +38,24 @@ Service Architecture
             ...
 
     [redis] ---> [pynzbdex/cmdpop] ---> [mysql] (decompose redis msg [json string] into standard relational model, [or mark as deleted])
+
+Assembly Strategies and Notes
+-----------------------------
+pynzbdex necessarily groups articles together that comprise uploaded files.
+it follow's Perl's aub's strategies for indirectly identifying alike files.
+
+Skipped if:
+* null subject or subject begins with Re:
+* any subject with .htm or more than one !(exclaimation point)
+
+Included if:
+* IFF subject matches:
+     ( $subject =~ m/^(.*)[^\d](1)\/(1)[^\d]/i ) ||
+     ( $subject =~ m/^(.*\D)(\d+)\s*\/\s*(\d+)/ ) ||
+     ( $subject =~ m/^(.*\D)(\d+)\s*\|\s*(\d+)/ ) ||
+     ( $subject =~ m/^(.*\D)(\d+)\s*\\\s*(\d+)/ ) ||
+     ( $subject =~ m/^(.*\D)(\d+)\s*o\s*f\s*(\d+)/i ) ||
+     ( $subject =~ m/^(.*\D)(\d+)\s*f\s*o\s*(\d+)/i )
+* subject includes filename extensions: these "hints" are used to help identify, not required like the previous item.
+    (".gif", ".jpg", ".jpeg", ".gl", ".zip", ".au", ".zoo",
+    ".exe", ".dl", ".snd", ".mpg", ".mpeg", ".tiff", ".lzh", ".wav" )

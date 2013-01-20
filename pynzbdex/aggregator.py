@@ -4,6 +4,7 @@ import logging
 import sys
 import pytz
 import traceback
+import re
 
 import riak
 import dateutil.parser
@@ -13,6 +14,7 @@ import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import DeferredReflection
+from sqlalchemy.sql import expression
 
 from pynzbdex.pynntpcli import NNTPProxyClient
 from pynzbdex import storage, settings
@@ -143,6 +145,7 @@ class Aggregator(object):
         key = article_d.key
         msg = json.dumps({
                 'from_': article_d.from_,
+                'bytes_': article_d.bytes_,
                 'subject': article_d.subject,
                 'date': time.mktime(article_d.date.timetuple()),
                 'newsgroups': article_d.newsgroups,
@@ -480,8 +483,9 @@ class Aggregator(object):
                     ## the headers is incomplete... riakkit uses set-type for
                     ## lists so we don't need to track redundance. This is an
                     ## intentionally destructive update.
-                    norm_headers['newsgroups'].extend(
-                            FieldParsers.commalist(long_headers['newsgroups']))
+                    if 'newsgroups' in long_headers:
+                        norm_headers['newsgroups'].extend(
+                                FieldParsers.commalist(long_headers['newsgroups']))
                     if 'date' in long_headers:
                         norm_headers['date'] = \
                                 FieldParsers.parsedate(long_headers['date'])
@@ -514,11 +518,14 @@ class Aggregator(object):
             ## progress. yes this does mean that we'll lose our place up to
             ## `nntp_chunksize` if it crashes...
             group_d.reload()
-            if (    previous_article_num and
-                    (abs(group_d.last_stored - previous_article_num)
-                        <= nntp_chunksize)  ):
-                log.info('LAST STORED: %s' % group_d.last_stored)
+            #if (    previous_article_num and
+            #        (abs(group_d.last_stored - previous_article_num)
+            #            <= nntp_chunksize)  ):
+            # yes you will concievably end up with gapping, but the
+            # non-resuming scanners will fill it in..
+            if previous_article_num:
                 group_d.last_stored = previous_article_num
+                log.info('LAST STORED: %s' % group_d.last_stored)
                 group_d.save()
 
         return {    'updated': updated_articles,
@@ -533,7 +540,7 @@ class Aggregator(object):
         ## be run from a separate thread or process than
         ## the article scraper.
 
-        log.info('PROCESSING REDIS CACHE')
+        log.info('Processing Redis Cache')
         ## fuck you sqlalchemy.  So Session is fucking code for secret
         ## transaction?  Seriously fuck youuuu.
         GROUPS = {}
@@ -544,7 +551,7 @@ class Aggregator(object):
         total_expired = 0
         for b in xrange(0, redis_indexbuckets):
             set_key = 'newart:%s' % b
-            log.debug('PROCESSING REDIS BUCKET: %s' % set_key)
+            log.debug('Processing Redis Index Bucket: %s' % set_key)
             try:
                 for mesg_spec in self._redis.smembers(set_key):
                     art_msg = self._redis.get(mesg_spec)
@@ -552,6 +559,9 @@ class Aggregator(object):
                     if art_msg:
                         if art_msg.startswith('EXPIRE'):
                             log.debug('EXPIRED FROM RDBMS: %s' % mesg_spec)
+                            ## this should check if the File (if any) associated
+                            ## with this thing still has any other assocated records
+                            ## and delete it if not
                             storage.sql.get_and_delete(self._sql, storage.sql.Article,
                                                        mesg_spec=mesg_spec)
                             total_expired += 1
@@ -576,12 +586,16 @@ class Aggregator(object):
                                                                       storage.sql.Group,
                                                                       name=group_name)
                                     GROUPS[group_name] = group
-                                article.groups.append(group)
+                                if not article.newsgroups.filter_by(id=group.id).count():
+                                    article.newsgroups.append(group) 
                             try:
                                 PROCESSED_MESSAGES[set_key].append(mesg_spec)
                             except KeyError:
                                 PROCESSED_MESSAGES[set_key] = [mesg_spec, ]
                             total_updated += 1
+                    else:
+                        ## clean up my mistakes
+                        self._redis.srem(set_key, mesg_spec)
                     total_processed += 1
             except:
                 log.error(traceback.format_exc())
@@ -590,8 +604,8 @@ class Aggregator(object):
                 ## SQA rolls back, like a dick, so only clear
                 ## redis if we got out cleanly
                 for set_key, specs in PROCESSED_MESSAGES.iteritems():
-                    self._redis.srem(set_key, mesg_spec)
                     for mesg_spec in specs:
+                        self._redis.srem(set_key, mesg_spec)
                         self._redis.delete(mesg_spec)
             finally:
                 ## flush at the end of every bucket.
@@ -602,4 +616,142 @@ class Aggregator(object):
         return {'processed': total_processed,
                 'updated': total_updated,
                 'deleted': total_expired}
-         
+
+    def group_articles(self, group_name, full_scan=False, complete_only=False, *args, **kwargs):
+        '''
+        this little guy produces "File" records comprised of one
+        or more "Articles"
+
+        selection/joining strategy directly pilfered from Perl's aub
+        full_scan:      look at all articles not just those not associated
+                        with a file
+        complete_only:  only attempt to raise completion on existing,
+                        incomplete Files
+        invalidate(?):  perhaps after a certain amount of time, if 
+                        something remains incomplete we zap  it,
+        '''
+        kill_subject = (
+            (lambda x: x == ''),
+            (lambda x: x.lower().startswith('re:')),
+            (lambda x: '.htm' in x),
+            (lambda x: x.count('!') > 1),
+        )
+
+        kiss_subject = tuple([re.compile(r, re.I) for r in (
+                                    r'^(.*)[^\d](1)/(1)[^\d]', 
+                                    r'^(.*\D)(\d+)\s*/\s*(\d+)',
+                                    r'^(.*\D)(\d+)\s*\|\s*(\d+)',
+                                    r'^(.*\D)(\d+)\s*\\\s*(\d+)',
+                                    r'^(.*\D)(\d+)\s*o\s*f\s*(\d+)',
+                                    r'^(.*\D)(\d+)\s*f\s*o\s*(\d+)',)])
+
+        subject_hints = tuple([(lambda x: h in x.lower()) for h in [
+                                    ".gif", ".jpg", ".jpeg", ".gl",
+                                    ".zip", ".au", ".zoo", ".exe",
+                                    ".dl", ".snd", ".mpg", ".mpeg",
+                                    ".tiff", ".lzh", ".wav", ".iso",
+                                    ".mkv", ".bin", ".avi", ".mp3",
+                                    ".mp4", ".x264", ".rar" ]])
+
+        stats = {'processed': 0,
+                 'updated': 0,
+                 'deleted': 0} 
+
+        offset = 0
+        limit = 5000
+
+        ## this needs to be further filtered to only
+        ## include articles not already associated with a file.
+        cq = self._sql.query(storage.sql.Article)
+        if full_scan:
+            cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name))
+        else:
+            cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name),
+                           storage.sql.Article.file_id == None)
+        cq = cq.order_by(expression.asc('subject'))
+
+        total = cq.count()
+        while offset < total:
+            log.info('Articles: %s - %s' % (offset, (offset+limit)))
+            for article in cq[offset:(offset+limit)]:
+                offset += 1
+                stats['processed'] += 1
+
+                subject = article.subject.strip()
+                # tests
+                if any(kill(subject) for kill in kill_subject):
+                    log.debug('KILL [%s]' % subject)
+                    continue
+
+                name = None
+                part = 1
+                parts = 1
+                for kiss in kiss_subject:
+                    match = re.match(kiss, subject)
+                    if match:
+                        log.debug('KISS [%s]' % subject)
+                        name, part, parts = match.groups()
+                        name = name.strip()
+                        ## strip yEnc suffix if obvious..
+                        for yesuff in [' yEnc (', ' yEnc']:
+                            if name.endswith(yesuff):
+                                name = name[:-len(yesuff)]
+                        break
+
+                if name == None:
+                    if any(hint(subject) for hint in subject_hints):
+                        log.debug('HINT [%s]' % subject)
+                        name = subject
+                    else:
+                        log.debug('OUT [%s]' % subject)
+                        continue
+
+                log.debug('Found <<<%s>>> (%s/%s)' % (name, part, parts))
+
+                ## update the article w/ its part number
+                if article.part != part:
+                    article.part = part
+                    self._sql.add(article)
+
+                ## we have an article we think could possibly be a filepart
+                ## e.g. has at least one group in common,
+                ## and shares a from.  This needs to be cached.
+                try:
+                    file_rec = storage.sql.get(self._sql, storage.sql.File,
+                                storage.sql.File.newsgroups.any(storage.sql.Group.id.in_([g.id for g in article.newsgroups])),
+                                from_=article.from_, subject=name)
+                except storage.sql.NotFoundError:
+                    file_rec = storage.sql.File(subject=name,
+                                                from_=article.from_)
+
+                ## stats
+                if not file_rec.date or file_rec.date < article.date:
+                    file_rec.date = article.date
+
+                if not file_rec.parts or file_rec.parts < parts:
+                    file_rec.parts = parts
+
+                file_rec.bytes_ =+ article.bytes_
+
+                ## must be in session before we add related items..
+                self._sql.add(file_rec)
+
+                ## relations
+                for group in article.newsgroups:
+                    if not file_rec.newsgroups.filter_by(id=group.id).count():
+                        file_rec.newsgroups.append(group)
+                file_rec.articles.append(article)
+
+                ## rollup
+                if file_rec.articles.count() == parts:
+                    file_rec.complete = True
+
+                if not (offset % 500):
+                    self._sql.commit()
+
+                stats['updated'] += 1
+                    
+            self._sql.commit()
+
+        return stats
+

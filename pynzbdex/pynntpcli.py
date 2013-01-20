@@ -61,7 +61,7 @@ class NNTPProxyClient(object):
                     self.close()
                     break
                 else:
-                    log.exception(e)
+                    log.debug(traceback.format_exc())
                     time.sleep(0.5)
         raise Exception('Could not send message')
 
@@ -76,7 +76,7 @@ class NNTPProxyClient(object):
                     if chunk:
                         break
                 except socket.error, e:
-                    log.exception(e)
+                    log.debug(traceback.format_exc())
                 else:
                     time.sleep(0.5)
 

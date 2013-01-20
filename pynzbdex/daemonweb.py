@@ -3,13 +3,15 @@ import re
 import sys
 import time
 import datetime
-import BaseHTTPServer
+from SocketServer import ThreadingMixIn
+from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 import urlparse
 import traceback
 from collections import OrderedDict
 import logging
 import copy
 import urllib
+import math
 
 from jinja2 import Template, Environment, PackageLoader
 from sqlalchemy import create_engine
@@ -55,6 +57,7 @@ def url_reverse(view_name, *args, **kwargs):
                 repl = dict(kwargs)
             else:
                 repl = dict(zip(fields, args))
+            print fields, args, repl
             path = patt % repl
 
         return '%s%s' % (URL_BASE, path)
@@ -94,18 +97,23 @@ class PagedResults(object):
         prev_offset = offset - per_page
         next_offset = offset + per_page
         current_offset = offset + 1
-        last_page = int(total / per_page) + 1
-        current_page = int(offset / per_page) + 1
+        
+        last_page = int(math.ceil(total / per_page)) + 1
+        current_page = int(math.ceil(offset / per_page)) + 1
         pages = []
 
         if prev_offset < 0:
             prev_offset = None
+            prev_page = None
         else:
-            prev_page = int(prev_offset / per_page) + 1
+            prev_page = int(math.ceil(prev_offset / per_page)) + 1
+
         if next_offset > total:
             next_offset = None
+            next_page = None
         else:
-            next_page = int(next_offset / per_page) + 1
+            next_page = int(math.ceil(next_offset / per_page)) + 1
+
         rem = (total % per_page)
         if rem:
             last_offset = total - rem
@@ -113,13 +121,13 @@ class PagedResults(object):
             last_offset = total - per_page
 
         ew = current_page + 5
-        if ew > last_page:
-            ew = last_page + 1
         cw = current_page - 3
-        if cw <  1:
+        if cw < 0:
             ew += -1 * cw
             cw = 1
-        for i in range(cw, ew):
+        if ew > last_page:
+            ew = last_page
+        for i in range(cw, ew+1):
             pages.append((i, i * per_page))
 
         self.q = q
@@ -128,6 +136,8 @@ class PagedResults(object):
         self.total = total
         self.prev_offset = prev_offset
         self.next_offset = next_offset
+        self.prev_page = prev_page
+        self.next_page = next_page
         self.current_offset = current_offset
         self.last_page = last_page
         self.current_page = current_page
@@ -135,8 +145,9 @@ class PagedResults(object):
 
     def all(self):
         #return self.q.all()
-        for aref in self.q[self.offset:(self.offset + self.per_page)]:
-            yield storage.riak.Article.get(aref.mesg_spec)
+        #for aref in self.q[self.offset:(self.offset + self.per_page)]:
+        #    yield storage.riak.Article.get(aref.mesg_spec)
+        return self.q[self.offset:(self.offset + self.per_page)]
 
 
 class ImmutableObject(object):
@@ -172,25 +183,43 @@ class PyNZBRequest(ImmutableObject):
 #################
 
 class PyNZBDexViewsBase(object):
+    methods = ['GET', 'POST']
+
     def __init__(self, *args, **kwargs):
+        super(PyNZBDexViewsBase, self).__init__(*args, **kwargs)
+
+    def storage_setup(self):
         sql_cfg = settings.DATABASE['default']
         dsn = '%(DIALECT)s+%(DRIVER)s://%(USER)s:%(PASS)s@%(HOST)s:%(PORT)s/%(NAME)s' % sql_cfg
         sql_engine = create_engine(dsn)
+        
+        ## stop running syncdb at startup after development.
+        storage.sql.Base.metadata.create_all(sql_engine)
+ 
         DeferredReflection.prepare(sql_engine)
         Session = sessionmaker(bind=sql_engine)
-        self._sql = Session() 
+        self._sql = Session()
+
+    def storage_teardown(self):
+        if self._sql:
+            self._sql.close() 
 
     def dispatch(self, request, *args, **kwargs):
-        methods = ['GET', 'POST']
+        self.storage_setup()
 
-        if request.method in methods: 
-            func = getattr(self, request.method.lower(), None)
-            if func:
-                return func(request, *args, **kwargs)
+        try:
+            if request.method in self.methods: 
+                func = getattr(self, request.method.lower(), None)
+                if func:
+                    return func(request, *args, **kwargs)
+                else:
+                    raise Exception('Unhandled method: %s' % request.method)
             else:
-                raise Exception('Unhandled method: %s' % request.method)
-        else:
-            raise Exception('Unknown method: %s' % request.method)
+                raise Exception('Unknown method: %s' % request.method)
+        except:
+            raise
+        finally:
+            self.storage_teardown()
 
     def render_template(self, name, ctx={}):
         tmpl = templates.get_template(name)
@@ -225,26 +254,32 @@ class PyNZBDexSearchGroup(PyNZBDexViewsBase):
                             'request': request,  })
 
 
-class PyNZBDexSearchArticle(PyNZBDexViewsBase):
-    template_name = 'search_article.html'
+class PyNZBDexSearch(PyNZBDexViewsBase):
+    template_name = 'search.html'
 
-    def get(self, request, group_name, *args, **kwargs):
+    def get(self, request, group_name, doctype, *args, **kwargs):
         query = request.GET.get('q', None)
         sort = request.GET.get('s', 'date desc')
         page = int(request.GET.get('p', 1) or 1)
         per_page = int(request.GET.get('pp', 25) or 25)
         source = request.GET.get('src', 'sql')
+        ## doctype one of article, file, report
 
-        #cq = "newsgroups:'%s'" % group_name
-        #if query:
-        #    cq = '%s AND %s' % (cq, query)
         group = storage.riak.Group.get(group_name)
 
         #group = storage.sql.get(self._sql, storage.sql.Group,
         #                        name=group_name)
 
-        cq = self._sql.query(storage.sql.Article).filter(
-                            storage.sql.Article.groups.any(name=group_name), )
+        if doctype == 'article':
+            cq = self._sql.query(storage.sql.Article)\
+                        .filter(storage.sql.Article.newsgroups.any(name=group_name))
+        elif doctype == 'file':
+            cq = self._sql.query(storage.sql.File)\
+                        .filter(storage.sql.File.newsgroups.any(name=group_name))
+        elif doctype == 'report':
+            raise NotImplementedError
+        else:
+            raise ValueError('Unknown doctype: %s' % doctype)
 
 
         pager = PagedResults(cq, sort, page, per_page)
@@ -253,6 +288,7 @@ class PyNZBDexSearchArticle(PyNZBDexViewsBase):
                             'pager': pager,
                             'today': datetime.datetime.today(),
                             'group': group,
+                            'doctype': doctype,
                             'request': request,  })
 
 
@@ -269,6 +305,21 @@ class PyNZBDexViewArticle(PyNZBDexViewsBase):
 
         return self.render({'request': request,
                             'article': article})
+
+
+class PyNZBDexViewFile(PyNZBDexViewsBase):
+    template_name = 'view_file.html'
+
+    def get(self, request, id, *args, **kwargs):
+        delete = request.GET.get('delete', False)
+
+        file_rec = storage.sql.get(self._sql, storage.sql.File, id=id)
+
+        if delete:
+            file_rec.delete()
+
+        return self.render({'request': request,
+                            'file': file_rec})
         
 
 ######################
@@ -282,7 +333,7 @@ def date(value, fmt='%d %b %Y'):
 def age(date, units='days'):
     return getattr((datetime.datetime.today() - date), units, None)
 
-def human_size(num):
+def humansize(num):
     for x in ['bytes','KB','MB','GB']:
         if num < 1024.0:
             return "%3.1f%s" % (num, x)
@@ -298,14 +349,14 @@ def keys(data):
     return data.keys()
 
 def url(name, *args, **kwargs):
-    return url_reverse(name, *args, **kwargs)
+    return url_reverse(str(name), *args, **kwargs)
 
 templates = Environment(loader=PackageLoader('pynzbdex', 'templates'),
                         autoescape=True)
 templates.filters.update({
         'date': date,
         'age': age,
-        'human_size': human_size,
+        'humansize': humansize,
         'query': query,
         'keys': keys,
         'url': url,
@@ -313,15 +364,18 @@ templates.filters.update({
 
 ROUTES = (
             ('^$', PyNZBDexHome().dispatch, 'home'),
-            ('^article/search/(?P<group_name>.+)/$',
-                PyNZBDexSearchArticle().dispatch,
+            ('^search/(?P<doctype>.+)/(?P<group_name>.+)/$',
+                PyNZBDexSearch().dispatch,
                 'article_search'),
-            ('^article/view/(?P<mesg_id>.+)/$',
+            ('^view/article/(?P<mesg_id>.+)/$',
                 PyNZBDexViewArticle().dispatch,
                 'article_view'),
+            ('^view/file/(?P<id>.+)/$',
+                PyNZBDexViewFile().dispatch,
+                'file_view'),
         )
 
-class PyNZBDexHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+class PyNZBDexHandler(BaseHTTPRequestHandler):
     server_version = 'PyNZBDex/1.0 HTTP/1.1'
 
     def do_GET(self):
@@ -386,12 +440,15 @@ class PyNZBDexHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                     POST=q_post,
                     REQUEST=q_request,
                 )
-                    
+    
+
+class MultiThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    pass                
 
 
 if __name__ == '__main__':
     HandlerClass = PyNZBDexHandler
-    ServerClass  = BaseHTTPServer.HTTPServer
+    ServerClass  = MultiThreadedHTTPServer
     Protocol     = "HTTP/1.1"
 
     if sys.argv[1:]:
