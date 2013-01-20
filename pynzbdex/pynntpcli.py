@@ -6,9 +6,7 @@ import select
 import time
 
 
-logging.basicConfig(format='%(levelname)s: %(message)s')
 log = logging.getLogger(__name__)
-log.setLevel('INFO')
 
 surrogates = re.compile(r'\\u[a-zA-Z0-9]{5,7}')
 def filter_surrogates(unicode_string):
