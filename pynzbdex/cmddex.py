@@ -2,18 +2,20 @@
 ## Inserts NNTP header data into Riak document store
 import logging
 import sys
+import os
 import argparse
 from Queue import Empty, Full
 from multiprocessing import Process, Queue
 from collections import OrderedDict
 
 from pynzbdex import aggregator
+from setproctitle import setproctitle
 
 
 LIVE_FOREVER = True
 JOB_SIZE = 10000
 WORKERS = {}
-
+PROC_TITLE_BASE = os.path.basename(__file__)
 
 def spawn_scraper(q, i, *args, **kwargs):
     ag = aggregator.Aggregator()
@@ -44,7 +46,8 @@ def marshall_worker(func, kind, index, group, conf):
         conf['offset'] = index * JOB_SIZE
         conf['max_processed'] = JOB_SIZE
     q = Queue()
-    p = Process(target=func,
+    p = Process(name='%s - %s' % (PROC_TITLE_BASE, scanid),
+                target=func,
                 args=(q, index, group),
                 kwargs=conf)
     proc = dict(q=q, p=p,
@@ -62,6 +65,7 @@ def marshall_worker(func, kind, index, group, conf):
 
 
 if __name__ == '__main__':
+    setproctitle(PROC_TITLE_BASE)
     ## GROUP WORK
     #ag = aggregator.Aggregator()
     #ag.scrape_groups()
@@ -110,6 +114,12 @@ if __name__ == '__main__':
                         get_long_headers=False,
                         invalidate=True,
                         cached=True)],
+        quick_full_scan=[spawn_scraper,
+                        dict(
+                        resume=False,
+                        get_long_headers=False,
+                        invalidate=False,
+                        cached=False)],
         ## PROCESSORS (Different Signature)
         redis_processor=[spawn_processor,
                         dict()],

@@ -402,7 +402,7 @@ class PyNZBDexHandler(BaseHTTPRequestHandler):
 
     def send_head(self, resp=200, size=0):
         self.send_response(resp)
-        self.send_header("Content-type", 'text-html')
+        self.send_header("Content-type", 'text-html; charset=UTF-8')
         self.send_header("Content-Length", size)
         self.send_header("Last-Modified", self.date_time_string(time.time()))
         self.end_headers()

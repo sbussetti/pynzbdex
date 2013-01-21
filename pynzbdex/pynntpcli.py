@@ -4,13 +4,17 @@ import socket
 import json
 import select
 import time
+import traceback
 
 
 log = logging.getLogger(__name__)
 
-surrogates = re.compile(r'\\u[a-zA-Z0-9]{5,7}')
+# we're just stripping all untranslated unicode @ this point
+# and we don't know what the width is, either..
+surrogates = re.compile(r'\\u[a-zA-Z0-9]{4,8}?', re.I)
 def filter_surrogates(unicode_string):
-    return surrogates.sub(u'\uFFFD', unicode_string)
+    return surrogates.sub(u'\u0244', unicode_string)
+    #return unicode_string
 
 
 class NNTPProxyClient(object):
@@ -64,13 +68,14 @@ class NNTPProxyClient(object):
         raise Exception('Could not send message')
 
     def recv(self):
-        data = b''
+        data = bytearray()
         while 1:
             ## really thin rety facility
-            chunk = b''
+            chunk = bytearray(self._size)
             for t in range(0,5):
                 try:
-                    chunk = self.sock.recv(self._size)
+                    #chunk = self.sock.recv(self._size)
+                    self.sock.recv_into(chunk, self._size)
                     if chunk:
                         break
                 except socket.error, e:
@@ -81,14 +86,14 @@ class NNTPProxyClient(object):
             if not chunk: 
                 break
             else:
-                data += chunk
+                data.extend(chunk)
             if data.endswith(b'\x00'):
                 break
 
         if not len(data) or not data.endswith(b'\x00'):
             raise Exception('Connection closed unexpectedly while receiving.')
 
-        data = filter_surrogates(data.decode('utf-8').rstrip('\x00'))
+        data = filter_surrogates(data.rstrip(b'\x00').decode('utf8'))
         return data
 
     def _command(self, cmd, arg=None):
@@ -113,6 +118,7 @@ class NNTPProxyClient(object):
                 log.debug('RECV')
                 sdata = self.recv()
             except:
+                log.debug(traceback.format_exc())
                 time.sleep(0.5)
                 continue
 

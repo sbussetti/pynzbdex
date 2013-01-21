@@ -1,11 +1,12 @@
 riak>=1.5.1
 riak-pb>=1.2.0,<1.3.0
 riakkit
-dateutil
+python-dateutil
 pytz
 jinja2
 protobuf
 redis>=2.7.2
 hiredis
-sqlalchemy=>0.8
+#sqlalchemy>=0.8
 mysql-python>=1.2.4
+setproctitle>=1.1.6

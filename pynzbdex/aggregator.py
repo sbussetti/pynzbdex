@@ -413,25 +413,27 @@ class Aggregator(object):
                     }
 
                 article_d = storage.riak.Article.getOrNew(key)
-                has_bad_xref_tag = False
+                #has_bad_xref_tag = False
 
                 xref_bits = [a.strip().split(':', 1)
                                 for a in short_headers['xref'].split(' ')][1:]
                 for g, i in xref_bits:
-                    if hasattr(article_d, 'xref_%s_int' % g):
-                        has_bad_xref_tag = True
+                    #if hasattr(article_d, 'xref_%s_int' % g):
+                    #    has_bad_xref_tag = True
 
                     ## use int suffix to tie into default schema..
                     k = 'xref_%s_int' % g.replace('.', '_')
                     norm_headers[k] = int(i)
                     norm_headers['newsgroups'].append(g)
 
+                '''
                 if has_bad_xref_tag:
                     log.error('>>>>>>> HAS BAD XREF TAG <<<<<<<')
                     article_d.delete()
                     article_d = storage.riak.Article(key)
                 else:
                     log.debug('<<<<<<< XREF TAGS CLEAN >>>>>>>>')
+                '''
 
                 ## cache check.. don't reindex if date and bytes match
                 if cached:
@@ -515,10 +517,7 @@ class Aggregator(object):
             ## at the end of each chunk, update the group record with our
             ## progress. yes this does mean that we'll lose our place up to
             ## `nntp_chunksize` if it crashes...
-            group_d.reload()
-            #if (    previous_article_num and
-            #        (abs(group_d.last_stored - previous_article_num)
-            #            <= nntp_chunksize)  ):
+            #group_d.reload()
             # yes you will concievably end up with gapping, but the
             # non-resuming scanners will fill it in..
             if previous_article_num:
@@ -576,6 +575,9 @@ class Aggregator(object):
                             art_obj = json.loads(art_msg)
                             ##temp (from -> from_)
                             art_obj['date'] = datetime.fromtimestamp(int(art_obj['date']))
+                            for k, v in art_obj.items():
+                                if isinstance(v, str):
+                                    art_obj[k] = unicode(v, 'utf8')
                             group_names = art_obj.pop('newsgroups')
 
                             article = storage.sql.get_or_create(self._sql,
@@ -607,12 +609,13 @@ class Aggregator(object):
                         self._redis.srem(set_key, mesg_spec)
 
                     total_processed += 1
-                    if not (total_processed % 100):
+                    if PROCESSED_MESSAGES and not (total_processed % 100):
                         ## flush every 100 records
                         for set_key, specs in PROCESSED_MESSAGES.iteritems():
                             for mesg_spec in specs:
                                 self._redis.srem(set_key, mesg_spec)
                                 self._redis.delete(mesg_spec)
+                        PROCESSED_MESSAGES = {}
                         ## flush at the end of every bucket.
                         log.debug('COMMIT TO RDBMS')
                         self._sql.commit()
@@ -622,13 +625,15 @@ class Aggregator(object):
             else:
                 ## SQA rolls back, like a dick, so only clear
                 ## redis if we got out cleanly
-                for set_key, specs in PROCESSED_MESSAGES.iteritems():
-                    for mesg_spec in specs:
-                        self._redis.srem(set_key, mesg_spec)
-                        self._redis.delete(mesg_spec)
-                ## flush at the end of every bucket.
-                log.debug('COMMIT TO RDBMS')
-                self._sql.commit()
+                if PROCESSED_MESSAGES:
+                    for set_key, specs in PROCESSED_MESSAGES.iteritems():
+                        for mesg_spec in specs:
+                            self._redis.srem(set_key, mesg_spec)
+                            self._redis.delete(mesg_spec)
+                    PROCESSED_MESSAGES = {}
+                    ## flush at the end of every bucket.
+                    log.debug('COMMIT TO RDBMS')
+                    self._sql.commit()
                 ## once I understand redis piplining this can be further
                 ## optimized
         return {'processed': total_processed,
@@ -738,6 +743,7 @@ class Aggregator(object):
                     file_rec = storage.sql.get(self._sql, storage.sql.File,
                                 storage.sql.File.newsgroups.any(storage.sql.Group.id.in_([g.id for g in article.newsgroups])),
                                 from_=article.from_, subject=name)
+                    log.debug('GOT FILE')
                 except storage.sql.NotFoundError:
                     file_rec = storage.sql.File(subject=name,
                                                 from_=article.from_,
@@ -745,6 +751,7 @@ class Aggregator(object):
                                                 parts=parts)
                     ## must be in session before we add related items..
                     self._sql.add(file_rec)
+                    log.debug('NEW FILE')
 
                 ## stats
                 mutator = {}
@@ -756,7 +763,7 @@ class Aggregator(object):
                     mutator['parts'] = parts
 
                 if not file_rec.articles.filter_by(id=article.id).count():
-                    mutator['bytes'] = file_rec.bytes_ + article.bytes_
+                    mutator['bytes_'] = file_rec.bytes_ + article.bytes_
                     mutator['article'] = article
 
                 ## relations

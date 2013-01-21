@@ -77,7 +77,8 @@ group_files = Table('group_files', Base.metadata,
 
 
 class Group(Base):
-    name = Column(String(length=255), nullable=False, unique=True)
+    name = Column(String(length=255, convert_unicode=True),
+                    nullable=False, unique=True)
 
     def __repr__(self):
         return u'%s' % self.name
@@ -88,7 +89,7 @@ class File(Base):
             UniqueConstraint('subject', 'from_'),
         )
 
-    subject = Column(String(length=255), nullable=False)
+    subject = Column(String(length=255, convert_unicode=True), nullable=False)
     complete = Column(Boolean, default=False, nullable=False)
     parts = Column(Integer, nullable=True) ## ... of X parts
     articles = relationship('Article', 
@@ -98,7 +99,7 @@ class File(Base):
                           secondary=group_files,
                           lazy='dynamic',
                           backref='files')
-    from_ = Column(String(length=255), nullable=False)
+    from_ = Column(String(length=255, convert_unicode=True), nullable=False)
     bytes_ = Column(Integer, nullable=False, default=0)
     date = Column(DateTime(timezone='UTC'), nullable=False)
 
@@ -112,9 +113,9 @@ class File(Base):
 
 
 class Article(Base):
-    mesg_spec = Column(String(length=255), nullable=False, unique=True)
-    subject = Column(String(length=511), nullable=False)
-    from_ = Column(String(length=255), nullable=False)
+    mesg_spec = Column(String(length=255, convert_unicode=True), nullable=False, unique=True)
+    subject = Column(String(length=511, convert_unicode=True), nullable=False)
+    from_ = Column(String(length=255, convert_unicode=True), nullable=False)
     bytes_ = Column(Integer, nullable=False, default=0)
     date = Column(DateTime(timezone='UTC'), nullable=False)
     part = Column(Integer, nullable=True) ## part X of..
