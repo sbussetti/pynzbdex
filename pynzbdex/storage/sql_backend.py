@@ -1,9 +1,14 @@
+import logging
+
 from sqlalchemy.ext.declarative import (declarative_base,
                                         DeferredReflection,
                                         declared_attr, synonym_for)
 from sqlalchemy.orm import relationship 
 from sqlalchemy import (Column, Integer, String, DateTime,
                         ForeignKey, Table, Boolean, UniqueConstraint)
+
+
+log = logging.getLogger(__name__)
 
 
 class NotFoundError(Exception):
@@ -75,6 +80,11 @@ group_files = Table('group_files', Base.metadata,
     UniqueConstraint('file_id', 'group_id'),
 )
 
+group_reports = Table('group_reports', Base.metadata,
+    Column('group_id', Integer, ForeignKey('group.id'), nullable=False),
+    Column('report_id', Integer, ForeignKey('report.id'), nullable=False),
+    UniqueConstraint('report_id', 'group_id'),
+)
 
 class Group(Base):
     name = Column(String(length=255, convert_unicode=True),
@@ -102,6 +112,9 @@ class File(Base):
     from_ = Column(String(length=255, convert_unicode=True), nullable=False)
     bytes_ = Column(Integer, nullable=False, default=0)
     date = Column(DateTime(timezone='UTC'), nullable=False)
+    report_id = Column(Integer,
+                    ForeignKey('report.id', ondelete='SET NULL'),
+                    nullable=True)
 
     def __repr__(self):
         return u'%s' % self.subject
@@ -123,6 +136,7 @@ class Article(Base):
                           secondary=group_articles,
                           lazy='dynamic',
                           backref='articles')
+    ##TODO: CONSIDER SETTING TO 0 OR DELETING TO AVOID CHURN..
     file_id = Column(Integer,
                     ForeignKey('file.id', ondelete='SET NULL'),
                     nullable=True)
@@ -134,3 +148,21 @@ class Article(Base):
     @property
     def key(self):
         return self.mesg_spec
+
+
+class Report(Base):
+    __table_args__ = (
+            UniqueConstraint('subject'),
+        )
+
+    subject = Column(String(length=255, convert_unicode=True), nullable=False)
+    complete = Column(Boolean, default=False, nullable=False)
+    files = relationship('File', 
+                          lazy='dynamic',
+                          backref='report')
+    newsgroups = relationship(Group,
+                          secondary=group_reports,
+                          lazy='dynamic',
+                          backref='reports')
+    bytes_ = Column(Integer, nullable=False, default=0)
+    date = Column(DateTime(timezone='UTC'), nullable=False)

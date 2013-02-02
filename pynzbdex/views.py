@@ -12,6 +12,7 @@ import logging
 import copy
 import urllib
 import math
+import logging
 
 from jinja2 import Template, Environment, PackageLoader
 from sqlalchemy import create_engine
@@ -20,6 +21,9 @@ from sqlalchemy.ext.declarative import DeferredReflection
 
 from pynzbdex import storage, settings
 from pynzbdex.template import templates
+
+
+log = logging.getLogger(__name__)
 
 class PyNZBDexViewsBase(object):
     methods = ['GET', 'POST']
@@ -113,9 +117,25 @@ class PyNZBDexSearch(PyNZBDexViewsBase):
         if doctype == 'article':
             cq = self._sql.query(storage.sql.Article)\
                         .filter(storage.sql.Article.newsgroups.any(name=group_name))
+            ## coverage stats
+            ## this is not accurate per- se as last_stored resets on
+            ## every pass ... need to keep better count
+            indexed = group.last_stored - group.first
+            remaining = group.last - group.last_stored
+            total = group.last - group.first
+            stats = dict(
+                    indexed_pct=int(round((indexed / float(total)) * 100)),
+                    remaining_pct=int(round((remaining / float(total)) * 100)),
+                    indexed=indexed,
+                    remaining=remaining,
+                    total=total,
+                )
         elif doctype == 'file':
             cq = self._sql.query(storage.sql.File)\
                         .filter(storage.sql.File.newsgroups.any(name=group_name))
+            ## TODO file stats will be just the percentage of articles with
+            ## and without association to a file
+            stats = {}
         elif doctype == 'report':
             raise NotImplementedError
         else:
@@ -124,10 +144,12 @@ class PyNZBDexSearch(PyNZBDexViewsBase):
 
         pager = PagedResults(cq, sort, page, per_page)
 
+
         return self.render({'results': pager.all(),
                             'pager': pager,
                             'today': datetime.datetime.today(),
                             'group': group,
+                            'stats': stats,
                             'doctype': doctype,
                             'request': request,  })
 
@@ -202,7 +224,7 @@ class PagedResults(object):
 
         ew = current_page + 5
         cw = current_page - 3
-        if cw < 0:
+        if cw <= 0:
             ew += -1 * cw
             cw = 1
         if ew > last_page:

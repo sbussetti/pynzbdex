@@ -1,32 +1,35 @@
+
 REDIS = {
-    'default' : {
-        'HOST' : 'sol-serv',
-        'PORT' : 6379,
-        'DB' : 1
+        'default' : {
+            'HOST' : 'sol-serv',
+            'PORT' : 6379,
+            'DB' : 1
+        }
     }
-}
 
 NNTP_PROXY = {
-    'default' : {
-        'HOST' : 'sol-serv',
-        'PORT' : 1701
+        'default' : {
+            'HOST' : 'localhost',
+            'PORT' : 1701
+        }
     }
-}
 
 RIAK = {
-    'default' : {
-        'HOST' : 'sol-serv',
+        'default' : {
+            'HOST' : 'sol-serv',
+        }
     }
-}
 
 DATABASE = {
-    'default' : {
-        'HOST' : 'sol-serv',
-        'PORT' : 3306,
-        'USER' : 'pynzbdex',
-        'PASS' : 'pynzbdex',
-        'NAME' : 'pynzbdex',
-        'DIALECT' : 'mysql',
-        'DRIVER' : 'mysqldb',
+        'default' : {
+            'HOST' : 'sol-serv',
+            'PORT' : 3306,
+            'USER' : 'pynzbdex',
+            'PASS' : 'pynzbdex',
+            'NAME' : 'pynzbdex',
+            'DIALECT' : 'mysql',
+            'DRIVER' : 'mysqldb',
+        }
     }
-}
+
+PICKLE_PROTOCOL = 2

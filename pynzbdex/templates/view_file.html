@@ -17,7 +17,7 @@
     <div class="row-fluid">
         <div class="span3">size:</div><div class="span9">{{ file.bytes_|humansize }}</div>
     </div>
-    {% if not complete %}
+    {% if not file.complete %}
     <div class="row-fluid">
         <div class="span12 centered"><span class="label label-important">This file is Incomplete</span></div>
     </div>
@@ -32,7 +32,7 @@
     <div class="row-fluid">
         <div class="span1">{{ article.part }}</div>
         <div class="span1">{{ article.bytes_|humansize }}</div>
-        <div class="span9">{{ article.subject }}</div>
+        <div class="span9"><a href="{{ 'article_view'|url(article.key) }}">{{ article.subject }}</a></div>
         <div class="span1">{{ article.date }}</div>
     </div>
     {% endfor %}

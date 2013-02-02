@@ -141,6 +141,9 @@ class Aggregator(object):
         the RDBMS with relational data.
         '''
         key = article_d.key
+        ##TODO: bytes field is for the entire raw post, including headers.
+        ##should calculate raw header size and then subtract from field value
+        ##to get a closer approximation of the file size.
         msg = json.dumps({
                 'from_': article_d.from_,
                 'bytes_': article_d.bytes_,
@@ -328,10 +331,10 @@ class Aggregator(object):
         processed_articles = 0
         deleted_articles = 0
 
-        first = (group_d.last_stored if resume 
-                                        and group_d.last_stored >= group_d.last
-                                     else group_d.first or 0)
+        first = group_d.last_stored if resume else group_d.first
+        if not first: first = 0
         first += offset
+
         last = group_d.last
         ## if we're up to date, or there was article loss on the 
         ## server since the last time we tried to get it.. 
@@ -357,33 +360,41 @@ class Aggregator(object):
         ### request I can make to NNTP
         ### get 1000 article short_headers at a time
         cursor_f = first
-        while ((cursor_f < last)
+        cursor_l = cursor_f + nntp_chunksize
+        if cursor_l > last: cursor_l = last
+        previous_article_num = None
+
+        while ((cursor_l <= last)
                     and
                 (   max_processed == None
                         or 
                     (max_processed != None and processed_articles < max_processed))):
-            cursor_l = cursor_f + nntp_chunksize - 1
-            if cursor_l > group_d.last:
-                cursor_l = group_d.last
 
-            log.debug('Get articles for %s between (%s, %s)' \
-                        % (group_name, cursor_f, cursor_l))
             articles = self._nntp.get_group((cursor_f, cursor_l), group_name)
+            log.info('Got %s articles for %s between (%s, %s)' \
+                        % (len(articles), group_name, cursor_f, cursor_l))
 
-            ## increment..
-            cursor_f += nntp_chunksize
+            ## break out on remaining indivisible chunk:
+            log.debug('CF %d CL %d L %d' % (cursor_f, cursor_l, last))
+            if cursor_f == cursor_l == last:
+               previous_article_num = last
+               break 
+            else:
+                ## increment..
+                cursor_f = cursor_l
+                cursor_l += nntp_chunksize
+                if cursor_l > last: cursor_l = last
+
             ## next, if not in resume mode,  look for
             ## noncontiguous missing articles, for instance ones
             ## that have been specifically taken down, while we're in here
             ## updating others.
-            previous_article_num = None
             for article_num, short_headers in articles:
                 if (    max_processed != None
                         and processed_articles >= max_processed):
                     break
                 log.debug('Processing article: %s:%s' % (group_name,
                                                          article_num))
-                processed_articles += 1
                 if invalidate:
                     # if in invalidation mode, then look for gaps in article
                     # IDs.  per RFC3977: "If the information is available,
@@ -396,13 +407,12 @@ class Aggregator(object):
                                                 previous_article_num,
                                                 article_num, inclusive=False)
 
-                previous_article_num = article_num
-
                 ## CREATION AND SHORT HEADERS
                 key = short_headers['message-id']
                 norm_headers = {
                         'article_num': article_num,
                         'lines': short_headers['lines'],
+            
                         'bytes_': short_headers['bytes'],
                         'xref': short_headers['xref'],
                         'from_': short_headers['from'],
@@ -434,6 +444,8 @@ class Aggregator(object):
                 else:
                     log.debug('<<<<<<< XREF TAGS CLEAN >>>>>>>>')
                 '''
+                previous_article_num = article_num
+                processed_articles += 1
 
                 ## cache check.. don't reindex if date and bytes match
                 if cached:
@@ -455,6 +467,7 @@ class Aggregator(object):
                 #log.debug(short_headers)
                 updated_articles += 1
                 ## LONG HEADERS
+
                 if get_long_headers: ## this happens one at a time..
                     ## i wonder if getting by article # is any faster than
                     ## msgid?, or vice versa?
@@ -514,21 +527,25 @@ class Aggregator(object):
 
                 log.debug('Article %s updated' % key)
 
+
             ## at the end of each chunk, update the group record with our
             ## progress. yes this does mean that we'll lose our place up to
             ## `nntp_chunksize` if it crashes...
             #group_d.reload()
             # yes you will concievably end up with gapping, but the
             # non-resuming scanners will fill it in..
-            if previous_article_num:
+
+            if resume and previous_article_num:
                 group_d.last_stored = previous_article_num
                 log.info('LAST STORED: %s' % group_d.last_stored)
                 group_d.save()
 
+        log.warning('last(%s) vs anum(%s)' % (group_d.last, previous_article_num))
         return {    'updated': updated_articles,
                     'deleted': deleted_articles,
                     'processed': processed_articles,
-                    'last_message_id': previous_article_num, }
+                    'last_message_id': previous_article_num, 
+                    'complete': (previous_article_num >= group_d.last)}
 
     def process_redis_cache(self, *args, **kwargs):
         ## this reads the redis cache and stores the resulting
@@ -641,6 +658,18 @@ class Aggregator(object):
                 'deleted': total_expired}
 
     def group_articles(self, group_name, full_scan=False, complete_only=False, *args, **kwargs):
+
+        ## ensure the /dev/null file, ID 0 exists so we have somewhere to put 
+        ## the trash.
+        ##TODO: i wish i were kidding but I think SqlAlchemy has a truth testing
+        ## bug that prevents you from asserting id = 0 when ID is the primary key
+        null_file = storage.sql.get_or_create(self._sql,
+                                            storage.sql.File,
+                                            id=0,
+                                            subject='NULL FILE',
+                                            defaults={'from_': 'nobody',
+                                                      'date': datetime.today()})
+        self._sql.commit()
         '''
         this little guy produces "File" records comprised of one
         or more "Articles"
@@ -704,6 +733,7 @@ class Aggregator(object):
                 # tests
                 if any(kill(subject) for kill in kill_subject):
                     log.debug('KILL [%s]' % subject)
+                    article.file_id = 0
                     continue
 
                 name = None
@@ -714,6 +744,8 @@ class Aggregator(object):
                     if match:
                         log.debug('KISS [%s]' % subject)
                         name, part, parts = match.groups()
+                        part = int(part)
+                        parts = int(parts)
                         name = name.strip()
                         ## strip yEnc suffix if obvious..
                         for yesuff in [' yEnc (', ' yEnc']:
@@ -727,6 +759,7 @@ class Aggregator(object):
                         name = subject
                     else:
                         log.debug('OUT [%s]' % subject)
+                        article.file_id = 0
                         continue
 
                 log.info('Found <<<%s>>> (%s/%s)' % (name, part, parts))
@@ -743,6 +776,7 @@ class Aggregator(object):
                     file_rec = storage.sql.get(self._sql, storage.sql.File,
                                 storage.sql.File.newsgroups.any(storage.sql.Group.id.in_([g.id for g in article.newsgroups])),
                                 from_=article.from_, subject=name)
+                    self._sql.add(file_rec)
                     log.debug('GOT FILE')
                 except storage.sql.NotFoundError:
                     file_rec = storage.sql.File(subject=name,
@@ -762,17 +796,20 @@ class Aggregator(object):
                 if not file_rec.parts or file_rec.parts < parts:
                     mutator['parts'] = parts
 
-                if not file_rec.articles.filter_by(id=article.id).count():
-                    mutator['bytes_'] = file_rec.bytes_ + article.bytes_
-                    mutator['article'] = article
-
                 ## relations
                 for group in article.newsgroups:
                     if not file_rec.newsgroups.filter_by(id=group.id).count():
                         file_rec.newsgroups.append(group)
 
+                if not file_rec.articles.filter_by(id=article.id).count():
+                    mutator['bytes_'] = file_rec.bytes_ + article.bytes_
+                    article.file = file_rec
+
                 ## rollup
-                if file_rec.articles.count() == parts:
+                ## TODO: NEED TO COUNT DISTINCT PARTS, NOT JUST TOTAL (DUE TO REPOSTS WITHIN
+                ## THE SAME FILE
+                if file_rec.articles.group_by(storage.sql.Article.part).count() >= parts:
+                    log.info('File Completion: %s of %s' % (file_rec.articles.group_by(storage.sql.Article.part).count(), parts))
                     mutator['complete'] = True
 
                 #file_rec.update(mutator)
@@ -788,5 +825,76 @@ class Aggregator(object):
                     
             self._sql.commit()
 
+        ## back in RDBMS land we can safely loop over all records...
+        ## but right now we want processors to run forever, and only die
+        ## once the scanners complete.
+        #stats['complete'] = True
         return stats
 
+    def group_files(self, group_name, full_scan=False, *args, **kwargs):
+        stats = {'processed': 0,
+                 'updated': 0,
+                 'deleted': 0} 
+
+        cq = self._sql.query(storage.sql.File)
+        if full_scan:
+            cq = cq.filter(storage.sql.File.newsgroups.any(name=group_name))
+        else:
+            cq = cq.filter(storage.sql.File.newsgroups.any(name=group_name),
+                           storage.sql.File.report_id == None)
+
+
+        kiss_subject = tuple([re.compile(r, re.I) for r in (
+                                    r'(.*)\s*<\s*\d+\s*/\s*\d+\s*\(.*\)\s*>\s*<\s*.*\s*>(.*)',
+                                    r'(.*)\s*\[\s*\d+\s*/\s*\d+\s*\]\s*(.*)',
+                                    r'(.*)(?:\.part\d+|\.vol\d+\+\d+)?\.(?:par2|r(?:ar|\d+))(.*)',
+                                    r'(.*)[\.-]sample\.\.{3}(.*)',
+                                )])
+
+        offset = 0
+        limit = 50
+        total = cq.count()
+        while offset < total:
+            log.info('Files: %s - %s' % (offset, (offset+limit)))
+            for file_rec in cq[offset:(offset+limit)]:
+                offset += 1
+                stats['processed'] += 1
+
+                #log.debug('%s:%s' % (file_rec.subject, file_rec.articles.count()))
+                if not file_rec.articles.count():
+                    log.info('Deleting empty file %s' % file_rec.subject)
+                    self._sql.delete(file_rec)
+                    stats['deleted'] += 1
+                    continue
+
+
+                log.info(file_rec.subject)
+                continue
+
+                ## look for x of y patterns in subject + parse out
+                ## also look at file extension, if subject matches  and has
+                ## a .r(ar|\d) extension
+                subject = file_rec.subject
+                kissed = False
+                for kiss in kiss_subject:
+                    match = re.match(kiss, subject)
+                    if match:
+                        kissed = True    
+                        subject = ''.join(match.groups())
+
+                if not kissed:
+                    log.error("Couldn't parse %s" % subject)
+                    raise Exception
+                else:
+                    log.debug("Parsed: %s" % subject)
+                ## get or create report with cleaned article subject
+
+                ## asscociate file with report if not already linked
+
+                if not (offset % 100):
+                    log.debug('FLUSH')
+                    self._sql.commit()
+
+        self._sql.commit()
+
+        return stats

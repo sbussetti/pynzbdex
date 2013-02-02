@@ -8,11 +8,10 @@
 
 <div class="row-fluid">
     <div class="group_info span6">
-        <h5>{{ group.key }} index completion: </h5>
+        <h5>{{ group.key }} index completion ({{ stats.total }}): </h5>
         <div class="progress progress-striped">
-          <div class="bar bar-info" style="width: {{ '%d'|format((group.first / group.last) * 100) }}%;">{{ group.first }}</div>
-          <div class="bar bar-success" style="width: {{ '%d'|format(((group.last_stored - group.first) / group.last) * 100) }}%;">{{ group.last_stored }}</div>
-          <div class="bar bar-warning" style="width: {{ '%d'|format(((group.last - group.last_stored) / group.last) * 100) }}%;">{{ group.last }}</div>
+          <div class="bar bar-success" style="width: {{ stats.indexed_pct }}%;">{{ stats.indexed }}</div>
+          <div class="bar bar-warning" style="width: {{ stats.remaining_pct }}%;">{{ stats.remaining }}</div>
         </div>
     </div>
 </div>

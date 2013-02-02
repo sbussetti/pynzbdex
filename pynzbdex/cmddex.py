@@ -4,6 +4,7 @@ import logging
 import sys
 import os
 import argparse
+import time
 from Queue import Empty, Full
 from multiprocessing import Process, Queue
 from collections import OrderedDict
@@ -24,14 +25,26 @@ def spawn_scraper(q, i, *args, **kwargs):
     del ag
 
 def spawn_processor(q, i, *args, **kwargs):
+    # be nice
+    time.sleep(30)
     ag = aggregator.Aggregator()
     res = ag.process_redis_cache(*args, **kwargs)
     q.put(res)
     del ag
 
-def spawn_grouper(q, i, *args, **kwargs):
+def spawn_article_grouper(q, i, *args, **kwargs):
+    # be nice
+    time.sleep(30)
     ag = aggregator.Aggregator()
     res = ag.group_articles(*args, **kwargs)
+    q.put(res)
+    del ag
+
+def spawn_file_grouper(q, i, *args, **kwargs):
+    # be nice
+    time.sleep(30)
+    ag = aggregator.Aggregator()
+    res = ag.group_files(*args, **kwargs)
     q.put(res)
     del ag
 
@@ -76,7 +89,7 @@ if __name__ == '__main__':
     ## ARTICLE WORK
     ## For now this list is hard coded. But would be based on
     ## each group object's Active flag.
-    scanner_config = dict(
+    worker_config = dict(
         full_scan=[spawn_scraper,
                         dict( 
                         resume=False,
@@ -121,17 +134,25 @@ if __name__ == '__main__':
                         invalidate=False,
                         cached=False)],
         ## PROCESSORS (Different Signature)
-        redis_processor=[spawn_processor,
+        redis_process=[spawn_processor,
                         dict()],
-        article_grouper=[spawn_grouper,
+        article_process=[spawn_article_grouper,
                         dict(
                         full_scan=False,
                         complete_only=False
                         )],
-        full_article_grouper=[spawn_grouper,
+        full_article_process=[spawn_article_grouper,
                         dict(
                         full_scan=True,
                         complete_only=False
+                        )],
+        file_process=[spawn_file_grouper,
+                        dict(
+                        full_scan=False,
+                        )],
+        full_file_process=[spawn_file_grouper,
+                        dict(
+                        full_scan=True,
                         )],
         )
     ## options
@@ -141,34 +162,49 @@ if __name__ == '__main__':
     aparser.add_argument('--loglevel', metavar='LEVEL', type=str,
                    choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
                    default='ERROR', help='verbosity level of logging facility')
-    for sc in scanner_config.keys():
+    aparser.add_argument('--never_retire', action='store_true', 
+                   default=False, help='do the same job forever')
+    for sc in worker_config.keys():
         aparser.add_argument('--%s' % sc, metavar='N', type=int, default=0,
-                       help='number of %s scanners to spawn' % sc)
+                       help='number of %s workers to spawn' % sc)
 
     args = aparser.parse_args()
 
-    logging.basicConfig(format='%(levelname)s:(%(name)s.%(funcName)s) %(message)s', level=args.loglevel)
+    logging.basicConfig(format=('%(levelname)s:(%(name)s.%(funcName)s) '
+                                '%(message)s'), level=args.loglevel)
     
     roster = []
     for group in args.groups:
-        for scanner_name, scanner in scanner_config.items():
-            scan_func, scan_config = scanner
-            num_instances = getattr(args, scanner_name)
+        for worker_name, worker in worker_config.items():
+            work_func, work_config = worker
+            num_instances = getattr(args, worker_name)
 
             ## doesn't really get used anymore.. perhaps
             ## a final report @ some point? or tui visualization..
-            roster.append((scanner_name, scan_func, num_instances))
+            roster.append((worker_name, work_func, num_instances))
 
             for i in xrange(0, num_instances):
-                conf = scan_config.copy()
-                scanid, proc = marshall_worker(scan_func, scanner_name,
+                conf = work_config.copy()
+                workid, proc = marshall_worker(work_func, worker_name,
                                                i, group, conf)
-                print 'Scanner [%s] started.' % scanid
+                print '[%s] started.' % workid
 
+        ##TODO: make marshall_worker not globally access WORKERS list
         ## lets only do one group at a time for now,
         ## as my single UNS account only allows for 8 simultaneous conns
         while WORKERS:
-            for scanid, proc in WORKERS.items():
+            scanners = [proc for proc in WORKERS.values()
+                            if proc['args']['kind'].endswith('_scan')]
+            processors = [proc for proc in WORKERS.values()
+                            if proc['args']['kind'].endswith('_process')]
+            ## we're done here..
+            #if not scanners and not processors:
+            if not args.never_retire and not scanners:
+                [s['p'].terminate() for n, s in WORKERS.items()]
+                WORKERS = {}
+                print 'Completed work on (%s)' % group
+
+            for workid, proc in WORKERS.items():
                 try:
                     res = proc['q'].get(timeout=1)
                 except Empty:
@@ -176,20 +212,21 @@ if __name__ == '__main__':
                 else:
                     ## ended normally.  
                     proc['p'].join()
-                    del WORKERS[scanid]
-                    print 'Scanner [%s] completed.' % scanid, '\n', res
+                    del WORKERS[workid]
+                    print 'Scanner [%s] returned.' % workid, '::', res
 
                     ## Keep sayin / Live Forever
                     ## as long as there's still articles to scrape
-                    if LIVE_FOREVER:# and res.get('processed', 0):
-                        scanid, proc = marshall_worker(*proc['args'].values())
-                        print 'Scanner [%s] started.' % scanid
-                    ## the proc died, but it did so cleanly, so continue to next
-                    ## iteration -- otherwise will cause false positives for life
-                    ## checking
+                    if LIVE_FOREVER and (not res.get('complete', False) or args.never_retire):
+                        workid, proc = marshall_worker(*proc['args'].values())
+                        print 'Scanner [%s] re-started.' % workid
+                    ## the proc died, but it did so cleanly, so continue to
+                    ## next iteration -- otherwise will cause false
+                    ## positives for life checking
                     continue
                     
                 if not proc['p'].is_alive():
                     #killemall...
                     [s['p'].terminate() for n, s in WORKERS.items()]
-                    raise RuntimeError('Scanner [%s] died unexpectedly.' % scanid)
+                    raise RuntimeError('Scanner [%s] died unexpectedly.' \
+                                        % workid)

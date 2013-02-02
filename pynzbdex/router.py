@@ -61,7 +61,6 @@ class Router(object):
                     repl = dict(kwargs)
                 else:
                     repl = dict(zip(fields, args))
-                print fields, args, repl
                 path = patt % repl
     
             return '%s%s' % (self.url_base, path)

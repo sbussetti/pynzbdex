@@ -25,12 +25,9 @@ storage.riak.BACKEND = 'HTTP'
 
 
 
-
-logging.basicConfig(format='%(levelname)s: %(message)s')
+logging.basicConfig(format='%(levelname)s:(%(name)s.%(funcName)s) %(message)s')
 log = logging.getLogger(__name__)
 log.setLevel('DEBUG')
-
-logging.getLogger('sqlalchemy.engine').setLevel(logging.INFO)
 
 
 ##################

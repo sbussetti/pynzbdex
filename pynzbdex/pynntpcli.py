@@ -1,13 +1,19 @@
 import re
 import logging
 import socket 
-import json
 import select
 import time
 import traceback
-
+from collections import OrderedDict
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
+import io
+io.DEFAULT_BUFFER_SIZE = 1024
 
 log = logging.getLogger(__name__)
+DELIMITER = b"\x00~~EOM~~\x00"
 
 # we're just stripping all untranslated unicode @ this point
 # and we don't know what the width is, either..
@@ -18,7 +24,8 @@ def filter_surrogates(unicode_string):
 
 
 class NNTPProxyClient(object):
-    def __init__(self, host='localhost', port=1701):
+    def __init__(self, host='localhost', port=1701, pickle_protocol=2):
+        self._pickle_protocol = pickle_protocol
         self._host = host
         self._port = port
         self._size = 1024
@@ -50,7 +57,7 @@ class NNTPProxyClient(object):
     def send(self, data):
         ## this is taking advantage of that fact that all
         ## requests are smaller than frame size..
-        data = (u'%s\x00' % data).encode('utf-8')
+        data = data + DELIMITER #.encode('utf-8')
         if len(data) > self._size:
             raise Exception('Request too large to send')
         ## try and then reconnect if needed..
@@ -68,33 +75,49 @@ class NNTPProxyClient(object):
         raise Exception('Could not send message')
 
     def recv(self):
-        data = bytearray()
+        #data = bytearray()
+        data = io.BytesIO()
+        eom = -1
         while 1:
             ## really thin rety facility
-            chunk = bytearray(self._size)
+            #chunk = bytearray(self._size)
+            bytes_recv = 0
             for t in range(0,5):
                 try:
-                    #chunk = self.sock.recv(self._size)
-                    self.sock.recv_into(chunk, self._size)
-                    if chunk:
+                    
+                    #self.sock.recv_into(chunk, self._size)
+                    #bytes_recv = self.sock.recv_into(data, self._size)
+                    bytes_recv = data.write(self.sock.recv(self._size))
+                    if bytes_recv:
                         break
+                    #if chunk:
+                    #    break
                 except socket.error, e:
                     log.debug(traceback.format_exc())
                 else:
                     time.sleep(0.5)
-
-            if not chunk: 
+            #if not chunk: 
+            #    break
+            #else:
+            #    data.extend(chunk)
+            if not bytes_recv:
                 break
+
+            #data = data.getvalue()
+            #log.debug(['DATA', data])
+            try:
+                eom = data.getvalue().index(DELIMITER)
+            except ValueError, IndexError:
+                pass
             else:
-                data.extend(chunk)
-            if data.endswith(b'\x00'):
                 break
 
-        if not len(data) or not data.endswith(b'\x00'):
+        if not eom >= 0:
             raise Exception('Connection closed unexpectedly while receiving.')
 
-        data = filter_surrogates(data.rstrip(b'\x00').decode('utf8'))
-        return data
+        #data = filter_surrogates(data.rstrip(b'\x00').decode('utf8'))
+        data.seek(0)
+        return data #.decode('utf8') #.rstrip(b'\x00')
 
     def _command(self, cmd, arg=None):
         ## sends a generic command to the server
@@ -105,12 +128,12 @@ class NNTPProxyClient(object):
         if arg is not None:
             req[u'ARG'] = arg
         try:
-            rdata = json.dumps(req, ensure_ascii=False)
-        except ValueError:
+            rdata = pickle.dumps(req, protocol=self._pickle_protocol)
+        except pickle.PicklingError:
             log.error(req)
             raise
 
-        sdata = ''
+        sdata = io.BytesIO()
         for i in range(0, 5):
             try:
                 log.debug('SEND')
@@ -122,25 +145,36 @@ class NNTPProxyClient(object):
                 time.sleep(0.5)
                 continue
 
-            if len(sdata):
-                try:
-                    seq = json.loads(sdata)
-                except ValueError:
-                    log.error(sdata)
-                    raise
-                try:
-                    RSP = seq['RSP']
-                except KeyError:
-                    log.error(seq)
-                    raise
+            try:
+                seq = pickle.load(sdata)
+            except pickle.UnpicklingError:
+                log.error(sdata)
+                raise
+            except EOFError:
+                continue
 
-                if RSP in ['OK', 'ERR']:
-                    return seq.get('ARG', None)
+            try:
+                RSP = seq['RSP']
+            except KeyError:
+                log.error(seq)
+                raise
+
+            if RSP in ['OK', 'ERR']:
+                resp = seq.get('ARG', None)
+                try:
+                    done = resp['code'] == '420'
+                except (TypeError, KeyError):
+                    done = False
+
+                if not done:
+                    return resp
                 else:
-                    log.error('nntp proxy sent bad response: %s' % seq['ARG'])
-                    ## retry the entire command..
-                    time.sleep(0.5)
-                    continue
+                    return []
+            else:
+                log.error('nntp proxy sent bad response: %s' % seq['ARG'])
+                ## retry the entire command..
+                time.sleep(0.5)
+                continue
 
         ## if we've reached this point we failed
         raise Exception('server went away')
