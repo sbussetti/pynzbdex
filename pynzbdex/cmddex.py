@@ -169,14 +169,14 @@ if __name__ == '__main__':
 
     args = aparser.parse_args()
 
-    logging.basicConfig(format=('%(levelname)s:(%(name)s.%(funcName)s) '
-                                '%(message)s'), level=args.loglevel)
-
+    logging.basicConfig(format=('%(levelname)s:(%(name)s.%(funcName)s'
+                                ':%(lineno)d) %(message)s'),
+                        level=args.loglevel)
 
     ## GROUP WORK
     if args.group_scan:
         ag = aggregator.Aggregator()
-        ag.scrape_groups(prefix='alt.binaries.nl', invalidate=True)
+        ag.scrape_groups(invalidate=False)
         del ag
     
     roster = []

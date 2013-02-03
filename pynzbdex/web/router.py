@@ -13,10 +13,12 @@ import copy
 import urllib
 import math
 
-from pynzbdex import daemonweb_regex_helper as resolver, settings
-from pynzbdex.views import (PyNZBDexHome, PyNZBDexSearchGroup, PyNZBDexSearch,
-                            PyNZBDexViewArticle, PyNZBDexViewFile,
-                            PyNZBDexMakeNZB, PyNZBDexViewReport)
+from pynzbdex import settings
+from pynzbdex.web import resolver
+from pynzbdex.web.views import (PyNZBDexHome, PyNZBDexSearchGroup,
+                            PyNZBDexSearch, PyNZBDexViewArticle,
+                            PyNZBDexViewFile, PyNZBDexMakeNZB,
+                            PyNZBDexViewReport)
 
 
 log = logging.getLogger(__name__)

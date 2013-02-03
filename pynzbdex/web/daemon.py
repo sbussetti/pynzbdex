@@ -17,17 +17,19 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import DeferredReflection
 from setproctitle import setproctitle
 
-from pynzbdex import storage, daemonweb_regex_helper as resolver, settings
-from pynzbdex.router import router
-from pynzbdex.template import templates
-from pynzbdex import daemonweb_http as http
+from pynzbdex import storage, settings
+from pynzbdex.web import resolver, http
+from pynzbdex.web.router import router
+from pynzbdex.web.template import templates
+
 
 storage.riak.BACKEND = 'HTTP'
 
-PROC_TITLE_BASE = os.path.basename(__file__)
+PROC_TITLE_BASE = 'pynzbdex.web'
 
-logging.basicConfig(format='%(levelname)s:(%(name)s.%(funcName)s) %(message)s')
-log = logging.getLogger(__name__)
+logging.basicConfig(format=('%(levelname)s:(%(name)s.%(funcName)s:%(lineno)d) '
+                           '%(message)s'))
+log = logging.getLogger('pynzbdex.web')
 log.setLevel('DEBUG')
 
 

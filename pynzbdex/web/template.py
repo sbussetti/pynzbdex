@@ -31,10 +31,10 @@ def keys(data):
     return data.keys()
 
 def url(name, *args, **kwargs):
-    from pynzbdex.router import router
+    from pynzbdex.web.router import router
     return router.url_reverse(str(name), *args, **kwargs)
 
-templates = Environment(loader=PackageLoader('pynzbdex', 'templates'),
+templates = Environment(loader=PackageLoader('pynzbdex.web', 'templates'),
                         autoescape=True)
 templates.filters.update({
         'date': date,

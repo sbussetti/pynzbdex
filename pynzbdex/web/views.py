@@ -21,8 +21,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import DeferredReflection
 
 from pynzbdex import storage, settings
-from pynzbdex.template import templates
-from pynzbdex import daemonweb_http as http
+from pynzbdex.web import http
+from pynzbdex.web.template import templates
 
 
 log = logging.getLogger(__name__)

@@ -1,2 +1,2 @@
-import storage.riak_backend as riak
-import storage.sql_backend as sql
+import riak_backend as riak
+import sql_backend as sql
