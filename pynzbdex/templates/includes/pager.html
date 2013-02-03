@@ -7,13 +7,15 @@
                 <li class="disabled"><a href="#">prev</a></li>
                 {% endif %}
 
-            {% for p, o in pager.pages %}
-                <li class="{% if p == pager.current_page %}active{% endif %}"><a href="?{{ request|query(p=p) }}">{{ p }}</a></li>
-            {% endfor %}
+            {% if pager.pages %}
+                {% for p, o in pager.pages %}
+                    <li class="{% if p == pager.current_page %}active{% endif %}"><a href="?{{ request|query(p=p) }}">{{ p }}</a></li>
+                {% endfor %}
 
-            {% if pager.last_page > pager.pages|last %}
-                <li class="disabled"><a href="#">...</a></li>
-                <li><a href="?{{ request|query(p=pager.last_page) }}">{{ pager.last_page }}</a></li>
+                {% if pager.last_page > pager.pages|last %}
+                    <li class="disabled"><a href="#">...</a></li>
+                    <li><a href="?{{ request|query(p=pager.last_page) }}">{{ pager.last_page }}</a></li>
+                {% endif %}
             {% endif %}
            
             {% if pager.next_page %} 

@@ -9,8 +9,9 @@ from Queue import Empty, Full
 from multiprocessing import Process, Queue
 from collections import OrderedDict
 
-from pynzbdex import aggregator
 from setproctitle import setproctitle
+
+from pynzbdex import aggregator
 
 
 LIVE_FOREVER = True
@@ -79,12 +80,6 @@ def marshall_worker(func, kind, index, group, conf):
 
 if __name__ == '__main__':
     setproctitle(PROC_TITLE_BASE)
-    ## GROUP WORK
-    #ag = aggregator.Aggregator()
-    #ag.scrape_groups()
-    #ag.invalidate_groups()
-    #del ag
-
 
     ## ARTICLE WORK
     ## For now this list is hard coded. But would be based on
@@ -164,7 +159,11 @@ if __name__ == '__main__':
                    default='ERROR', help='verbosity level of logging facility')
     aparser.add_argument('--never_retire', action='store_true', 
                    default=False, help='do the same job forever')
-    for sc in worker_config.keys():
+    aparser.add_argument('--group_scan', action='store_true', 
+                   default=False, help='before doing anything, '
+                                       'refresh the list of groups')
+    for sc in sorted(worker_config.keys(),
+                                key=lambda k: '%s%s' % (k[k.rfind('_'):], k)):
         aparser.add_argument('--%s' % sc, metavar='N', type=int, default=0,
                        help='number of %s workers to spawn' % sc)
 
@@ -172,6 +171,13 @@ if __name__ == '__main__':
 
     logging.basicConfig(format=('%(levelname)s:(%(name)s.%(funcName)s) '
                                 '%(message)s'), level=args.loglevel)
+
+
+    ## GROUP WORK
+    if args.group_scan:
+        ag = aggregator.Aggregator()
+        ag.scrape_groups(prefix='alt.binaries.nl', invalidate=True)
+        del ag
     
     roster = []
     for group in args.groups:
@@ -217,7 +223,8 @@ if __name__ == '__main__':
 
                     ## Keep sayin / Live Forever
                     ## as long as there's still articles to scrape
-                    if LIVE_FOREVER and (not res.get('complete', False) or args.never_retire):
+                    if (LIVE_FOREVER and (not res.get('complete', False)
+                                                        or args.never_retire)):
                         workid, proc = marshall_worker(*proc['args'].values())
                         print 'Scanner [%s] re-started.' % workid
                     ## the proc died, but it did so cleanly, so continue to

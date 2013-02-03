@@ -1,10 +1,18 @@
 {% extends "base.html" %}
 
 {% block body %}
-<form method="GET">
-<input name="q" type="text" value=""/>
-<input type="submit" name="submit" value="search"/>
-</form>
+<div class="navbar">
+  <div class="navbar-inner">
+    <a class="brand" href="#">pynzbdex</a>
+    <ul class="nav">
+    <li>
+        <form method="GET" class="navbar-search pull-left">
+        <input name="q" type="text" value="{{ query }}" class="search-query" placeholder="search"/><a href="{{ request.path }}">x</a>
+        </form>
+    </li>
+    </ul>
+  </div>
+</div>
 
 <div class="row-fluid">
     <div class="group_info span6">
@@ -31,6 +39,7 @@
     </div>
 </div>
 
+<form action="{{ 'make_nzb'|url() }}" method="POST">
 <div class="row-fluid">
     <div class="span12">
         <div class="results table">
@@ -59,7 +68,7 @@
                 </div>
                 <div class="cell">
                     <div class="left">
-                    Post Age
+                    {{ doctype|capitalize }} Age
                     </div>
                     <div class="right">
                         <ul class="sort unstyled">
@@ -70,7 +79,11 @@
                 </div>
             </div>
             <div class="table-row centered">
-                <div class="cell"> </div>
+                <div class="cell">
+                    {% if doctype == 'file' %}
+                        <input type="submit" value="Create NZB"/>
+                    {% endif %}
+                </div>
                 <div class="cell">
                     {{ today|date }}
                 </div>
@@ -79,6 +92,9 @@
             {% for res in results %}
             <div class="table-row">
                 <div class="cell">
+                    {% if doctype == 'file' %}
+                        <input name="f" type="checkbox" value="{{ res.id }}"/>
+                    {% endif %} 
                     ({{ res.bytes_|humansize }})
                 </div>
                 <div class="cell">
@@ -88,12 +104,12 @@
                         {% elif doctype == 'file' %}
                         <a href="{{ 'file_view'|url(res.key) }}">{{ res.subject }}</a>
                         {% elif doctype == 'report' %}
-                        NOT IMPLEMENTED
+                        <a href="{{ 'report_view'|url(res.key) }}">{{ res.subject }}</a>
                         {% endif %}
                     </div>
                     <div>
                     {% for g in res.newsgroups %}
-                        <a href="{{ 'article_search'|url(doctype, g) }}">{{ g }}</a>
+                        <a href="{{ 'search'|url(doctype, g) }}">{{ g }}</a>
                     {% endfor %}
                     </div>
                     <div>
@@ -104,7 +120,9 @@
                         <span class="label label-important">This File is Incomplete</span>
                         {% endif %}
                     {% elif doctype == 'report' %}
-                    NOT IMPLEMENTED
+                        {% if not res.complete %}
+                        <span class="label label-info">This Report is not Verified</span>
+                        {% endif %}
                     {% endif %}
                     </div>
                 </div>
@@ -117,6 +135,7 @@
         </div>
     </div>
 </div>
+</form>
 
 <div class="row-fluid">
     <div class="span5">

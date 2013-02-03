@@ -14,7 +14,9 @@ import urllib
 import math
 
 from pynzbdex import daemonweb_regex_helper as resolver, settings
-from pynzbdex.views import PyNZBDexHome, PyNZBDexSearchGroup, PyNZBDexSearch, PyNZBDexViewArticle, PyNZBDexViewFile
+from pynzbdex.views import (PyNZBDexHome, PyNZBDexSearchGroup, PyNZBDexSearch,
+                            PyNZBDexViewArticle, PyNZBDexViewFile,
+                            PyNZBDexMakeNZB, PyNZBDexViewReport)
 
 
 log = logging.getLogger(__name__)
@@ -26,13 +28,19 @@ ROUTES = (
             ('^$', PyNZBDexHome().dispatch, 'home'),
             ('^search/(?P<doctype>.+)/(?P<group_name>.+)/$',
                 PyNZBDexSearch().dispatch,
-                'article_search'),
+                'search'),
             ('^view/article/(?P<mesg_id>.+)/$',
                 PyNZBDexViewArticle().dispatch,
                 'article_view'),
             ('^view/file/(?P<id>.+)/$',
                 PyNZBDexViewFile().dispatch,
                 'file_view'),
+            ('^view/report/(?P<id>.+)/$',
+                PyNZBDexViewReport().dispatch,
+                'report_view'),
+            ('^nzb/$',
+                PyNZBDexMakeNZB().dispatch,
+                'make_nzb'),
         )
 
 class Router(object):

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from sqlalchemy.ext.declarative import (declarative_base,
                                         DeferredReflection,
@@ -165,4 +166,13 @@ class Report(Base):
                           lazy='dynamic',
                           backref='reports')
     bytes_ = Column(Integer, nullable=False, default=0)
-    date = Column(DateTime(timezone='UTC'), nullable=False)
+    date = Column(DateTime(timezone='UTC'), nullable=False, default=datetime.today())
+
+    def __repr__(self):
+        return u'%s' % self.subject
+
+    @synonym_for('mesg_spec')
+    @property
+    def key(self):
+        return self.id
+

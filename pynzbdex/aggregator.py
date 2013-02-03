@@ -5,6 +5,7 @@ import sys
 import pytz
 import traceback
 import re
+import itertools
 
 import riak
 import dateutil.parser
@@ -31,6 +32,13 @@ riak_chunksize = 1000
 # when querying ranges, the max we'll span
 # (anything larger needs to be divided and aggregated)
 range_stepsize = 10000
+
+
+def char_range(c1, c2):
+    """Generates the characters from `c1` to `c2`, inclusive."""
+    for c in xrange(ord(c1), ord(c2)+1):
+        yield chr(c)
+
 
 class FieldParsers(object):
     ## a collection of classmethods to handle complex field normalization.
@@ -263,48 +271,35 @@ class Aggregator(object):
 
         return keys_deleted
 
-    def invalidate_groups(self, prefix='alt.binaries.*'):
+    def scrape_groups(self, prefix='alt.binaries.*', invalidate=False):
         ## scans the groups we know and prunes ones that do not exist
         ## grouplist is not prohibitvely large as article list,
         ## so we can just do it like this.... article list will take
         ## some different tactics... but is actually easier due to first/last
         ## article ID..
+        if not prefix.endswith('.*'):
+            log.warning('Got dangling prefix, appending ".*"')
+            prefix = '%s.*' % prefix
+        else:
+            prefix = prefix
+
+        stats = {
+                'processed': 0,
+                'updated': 0,
+                'deleted': 0
+            }
 
         ## so this is just a list of groupnames from the NNTP server
         groups = self._nntp.get_groups(prefix)
-        nntp_groups = [g['group'] for g in groups]
 
-        log.info('Invalidating groups, got %s groups from NNTP server' \
-                    % len(nntp_groups))
-        ## mr object already filters based on the prefix for the groups
-        ## we want to invalidate. 
-        q = storage.riak.Group.mapreduce()
-        if prefix[-1] == '*': ## startswith
-            p = prefix.rstrip('*')
-            q.add_key_filters(riak.key_filter.starts_with(p))
-        else:
-            q.add_key_filters(riak.key_filter.eq(prefix))
-
-        #q.map("""function(v){ return [[v.bucket, v.key, v.vclock]]; }""")
-        doc_groups = [d.get_key() for d in q.run()]
-        dead_groups = set(doc_groups) - set(nntp_groups)
-
-        ##TODO: we have to get the keylist outside of riak  .. is there
-        ## a way to feed back in the keylist and have things deleted
-        ## via the reduce-phase deleted?
-        keys = []
-        for k in dead_groups:
-            log.info('Deleting group: %s' % k)
-            fro = FakeRiakObject(FakeRiakBucket(storage.riak.Group.bucket_name), k, None)
-            storage.riak.client.get_transport().delete(fro)
-            keys.append(k)
-        return keys
-
-    def scrape_groups(self, prefix='alt.binaries.*'):
         ## updates our store of groups based on a prefix.
-        log.info('Updating group store')
-        groups = self._nntp.get_groups(prefix)
+        log.info('Updating group store for prefix %s' % prefix)
+        nntp_groups = []
         for group in groups:
+            nntp_groups.append(group['group'])
+
+            stats['processed'] += 1
+
             log.debug('Updating group: %s' % group['group'])
             group_d = storage.riak.Group.getOrNew(group['group'],
                                             **{'first': group['first'],
@@ -313,6 +308,71 @@ class Aggregator(object):
             ## group list doesn't return count.. only the get 
             ## single group groups style does...
             group_d.save()
+
+            stats['updated'] += 1
+
+        '''
+        http://www.net.berkeley.edu/dcns/usenet/alt-creation-guide.html
+
+        Newsgroup names which have components that are composed of the
+        characters other than the letters 'a' through 'z', plus the characters
+        '-' and '+' are considered non-standard and not encouraged.
+
+        ...
+
+        Newsgroup Longevity:
+        There are some people who insist that once an alt newsgroup is created,
+        it can never be destroyed, no matter what. These people make sure that 
+        whenever someone tries to remove a group, it gets re-created. Even if
+        these people were not on the net, occasional mistakes (in such
+        situations as people setting up new sites) can cause almost-dead
+        newsgroups to get revived everywhere. Thus, alt groups are effectively 
+        immortal, at least for the foreseeable future; they can't be removed
+        or even re-named. Alt groups never die, they just fade away. However,
+        some alt groups fade away faster than others.
+
+        ---
+        In other words, without an exceedingly cheap algorithm for invalidating
+        groups, it's not worth doing.
+        '''
+
+        if invalidate:
+            log.info('Invalidating groups, got %s groups from NNTP server' \
+                        % len(nntp_groups))
+            ## mr object already filters based on the prefix for the groups
+            ## we want to invalidate. 
+            q = storage.riak.Group.mapreduce()
+            if prefix.endswith('*'):
+                prefix = prefix.rstrip('*')
+
+            for vc in itertools.chain(char_range('a', 'z'),
+                                      char_range('A', 'Z'),
+                                      char_range('0', '9'), ['-', '+']):
+                newp = '%s%s' % (prefix, vc)
+                log.debug('Checking groupname subspace: %s' % newp)
+
+                q.add_key_filters(riak.key_filter.starts_with(newp))
+
+                q.map("""function(v){ return [v.key]; }""")
+                doc_groups = q.run()
+                #doc_groups = [d.get_key() for d in q.run()]
+                dead_groups = set(doc_groups) - set(nntp_groups)
+                log.debug(['DOC GROUPS', doc_groups])
+                log.debug(['DEAD GROUPS', dead_groups])
+
+                continue
+
+                ##TODO: we have to get the keylist outside of riak  .. is there
+                ## a way to feed back in the keylist and have things deleted
+                ## via the reduce-phase deleted?
+                frb = FakeRiakBucket(storage.riak.Group.bucket_name)
+                for k in dead_groups:
+                    log.info('Deleting group: %s' % k)
+                    fro = FakeRiakObject(frb, k, None)
+                    storage.riak.client.get_transport().delete(fro)
+                    stats['deleted'] += 1
+
+        return stats
 
     def scrape_articles(self, group_name, get_long_headers=False,
                         invalidate=False, cached=True, offset=0,
@@ -576,15 +636,24 @@ class Aggregator(object):
                             ## this should check if the File (if any) associated
                             ## with this thing still has any other assocated records
                             ## and delete it if not
-                            deleted_article = storage.sql.get_and_delete(self._sql,
+                            try:
+                                article = storage.sql.get(self._sql,
                                                         storage.sql.Article,
                                                         mesg_spec=mesg_spec)
-
-                            if deleted_article:
-                                file_rec = deleted_article.file
-                                if file_rec.articles.count() == 0:
+                            except storage.sql.NotFoundError:
+                                pass
+                            else:
+                                file_rec = article.file
+                                self._sql.delete(article)
+        
+                                if file_rec and file_rec.articles.count() == 0:
                                     log.info('LAST ARTICLE, DELETING FILE: %s' % file.subject)
+                                    report = file_rec.report
                                     self._sql.delete(file_rec)
+
+                                    if report and report.files.count() == 0:
+                                        log.info('LAST FILE, DELETING REPORT: %s' % report.subject)
+                                        self._sql.delete(report)
 
                             total_expired += 1
                         else:
@@ -657,18 +726,20 @@ class Aggregator(object):
                 'updated': total_updated,
                 'deleted': total_expired}
 
-    def group_articles(self, group_name, full_scan=False, complete_only=False, *args, **kwargs):
+    def group_articles(self, group_name, full_scan=False, complete_only=False,
+                                                            *args, **kwargs):
 
         ## ensure the /dev/null file, ID 0 exists so we have somewhere to put 
         ## the trash.
-        ##TODO: i wish i were kidding but I think SqlAlchemy has a truth testing
-        ## bug that prevents you from asserting id = 0 when ID is the primary key
+        ## TODO: i wish i were kidding but I think SqlAlchemy has a truth
+        ## testing bug that prevents you from asserting id = 0 when ID
+        ## is the primary key.  (I had to manually create this record)
         null_file = storage.sql.get_or_create(self._sql,
-                                            storage.sql.File,
-                                            id=0,
-                                            subject='NULL FILE',
-                                            defaults={'from_': 'nobody',
-                                                      'date': datetime.today()})
+                                        storage.sql.File,
+                                        id=0,
+                                        subject='NULL FILE',
+                                        defaults={'from_': 'nobody',
+                                                  'date': datetime.today()})
         self._sql.commit()
         '''
         this little guy produces "File" records comprised of one
@@ -709,121 +780,114 @@ class Aggregator(object):
                  'updated': 0,
                  'deleted': 0} 
 
-        offset = 0
-        limit = 5000
-
-        ## this needs to be further filtered to only
-        ## include articles not already associated with a file.
         cq = self._sql.query(storage.sql.Article)
         if full_scan:
             cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name))
         else:
             cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name),
                            storage.sql.Article.file_id == None)
-        cq = cq.order_by(expression.asc('subject'))
+        cq = cq.order_by(expression.asc('subject')).distinct()
 
         total = cq.count()
-        while offset < total:
-            log.info('Articles: %s - %s' % (offset, (offset+limit)))
-            for article in cq[offset:(offset+limit)]:
-                offset += 1
-                stats['processed'] += 1
+        log.info('Articles: %s' % total)
+        for article in cq.all():
+            stats['processed'] += 1
 
-                subject = article.subject.strip()
-                # tests
-                if any(kill(subject) for kill in kill_subject):
-                    log.debug('KILL [%s]' % subject)
+            #flush every 100 records -- could flush a little
+            #more smartly, but need to avoid hanging session
+            #transactions.
+            if not (stats['processed'] % 100):
+                log.debug('FLUSH')
+                self._sql.commit()
+
+            subject = article.subject.strip()
+            # tests
+            if any(kill(subject) for kill in kill_subject):
+                log.debug('KILL [%s]' % subject)
+                article.file_id = 0
+                continue
+
+            name = None
+            part = 1
+            parts = 1
+            for kiss in kiss_subject:
+                match = re.match(kiss, subject)
+                if match:
+                    log.debug('KISS [%s]' % subject)
+                    name, part, parts = match.groups()
+                    part = int(part)
+                    parts = int(parts)
+                    name = name.strip()
+                    ## strip yEnc suffix if obvious..
+                    for yesuff in [' yEnc (', ' yEnc']:
+                        if name.endswith(yesuff):
+                            name = name[:-len(yesuff)]
+                    break
+
+            if name == None:
+                if any(hint(subject) for hint in subject_hints):
+                    log.debug('HINT [%s]' % subject)
+                    name = subject
+                else:
+                    log.debug('OUT [%s]' % subject)
                     article.file_id = 0
                     continue
 
-                name = None
-                part = 1
-                parts = 1
-                for kiss in kiss_subject:
-                    match = re.match(kiss, subject)
-                    if match:
-                        log.debug('KISS [%s]' % subject)
-                        name, part, parts = match.groups()
-                        part = int(part)
-                        parts = int(parts)
-                        name = name.strip()
-                        ## strip yEnc suffix if obvious..
-                        for yesuff in [' yEnc (', ' yEnc']:
-                            if name.endswith(yesuff):
-                                name = name[:-len(yesuff)]
-                        break
+            log.info('Found <<<%s>>> (%s/%s)' % (name, part, parts))
 
-                if name == None:
-                    if any(hint(subject) for hint in subject_hints):
-                        log.debug('HINT [%s]' % subject)
-                        name = subject
-                    else:
-                        log.debug('OUT [%s]' % subject)
-                        article.file_id = 0
-                        continue
+            ## update the article w/ its part number
+            if article.part != part:
+                article.part = part
 
-                log.info('Found <<<%s>>> (%s/%s)' % (name, part, parts))
+            ## we have an article we think could possibly be a filepart
+            ## (same subject) and shares a from.  This needs to be cached.
+            try:
+                file_rec = storage.sql.get(self._sql, storage.sql.File,
+                            from_=article.from_, subject=name)
+                log.debug('GOT FILE')
+            except storage.sql.NotFoundError:
+                file_rec = storage.sql.File(subject=name,
+                                            from_=article.from_,
+                                            date=article.date,
+                                            parts=parts)
+                ## must be in session before we add related items..
+                log.debug('NEW FILE')
+            self._sql.add(file_rec)
 
-                ## update the article w/ its part number
-                if article.part != part:
-                    article.part = part
-                    self._sql.add(article)
+            ## stats
+            mutator = {}
 
-                ## we have an article we think could possibly be a filepart
-                ## e.g. has at least one group in common,
-                ## and shares a from.  This needs to be cached.
-                try:
-                    file_rec = storage.sql.get(self._sql, storage.sql.File,
-                                storage.sql.File.newsgroups.any(storage.sql.Group.id.in_([g.id for g in article.newsgroups])),
-                                from_=article.from_, subject=name)
-                    self._sql.add(file_rec)
-                    log.debug('GOT FILE')
-                except storage.sql.NotFoundError:
-                    file_rec = storage.sql.File(subject=name,
-                                                from_=article.from_,
-                                                date=article.date,
-                                                parts=parts)
-                    ## must be in session before we add related items..
-                    self._sql.add(file_rec)
-                    log.debug('NEW FILE')
+            if not file_rec.date or file_rec.date < article.date:
+                mutator['date'] = article.date
 
-                ## stats
-                mutator = {}
+            if not file_rec.parts or file_rec.parts < parts:
+                mutator['parts'] = parts
 
-                if not file_rec.date or file_rec.date < article.date:
-                    mutator['date'] = article.date
+            ## relations
+            for group in article.newsgroups:
+                if not file_rec.newsgroups.filter_by(id=group.id).count():
+                    file_rec.newsgroups.append(group)
 
-                if not file_rec.parts or file_rec.parts < parts:
-                    mutator['parts'] = parts
+            if not file_rec.articles.filter_by(id=article.id).count():
+                mutator['bytes_'] = file_rec.bytes_ + article.bytes_
+                article.file = file_rec
 
-                ## relations
-                for group in article.newsgroups:
-                    if not file_rec.newsgroups.filter_by(id=group.id).count():
-                        file_rec.newsgroups.append(group)
+            ## rollup
+            if (file_rec.articles.group_by(storage.sql.Article.part).count()
+                                                                    >= parts):
+                log.info('File Completion: %s of %s' % \
+                        (file_rec.articles.group_by(
+                                        storage.sql.Article.part).count(),
+                                        parts))
+                mutator['complete'] = True
 
-                if not file_rec.articles.filter_by(id=article.id).count():
-                    mutator['bytes_'] = file_rec.bytes_ + article.bytes_
-                    article.file = file_rec
+            #file_rec.update(mutator)
+            for k, v in mutator.items():
+                setattr(file_rec, k, v)
 
-                ## rollup
-                ## TODO: NEED TO COUNT DISTINCT PARTS, NOT JUST TOTAL (DUE TO REPOSTS WITHIN
-                ## THE SAME FILE
-                if file_rec.articles.group_by(storage.sql.Article.part).count() >= parts:
-                    log.info('File Completion: %s of %s' % (file_rec.articles.group_by(storage.sql.Article.part).count(), parts))
-                    mutator['complete'] = True
-
-                #file_rec.update(mutator)
-                for k, v in mutator.items():
-                    setattr(file_rec, k, v)
-
-                #flush every 100 records
-                if not (offset % 100):
-                    log.debug('FLUSH')
-                    self._sql.commit()
-
-                stats['updated'] += 1
+            stats['updated'] += 1
                     
-            self._sql.commit()
+        self._sql.commit()
 
         ## back in RDBMS land we can safely loop over all records...
         ## but right now we want processors to run forever, and only die
@@ -842,59 +906,78 @@ class Aggregator(object):
         else:
             cq = cq.filter(storage.sql.File.newsgroups.any(name=group_name),
                            storage.sql.File.report_id == None)
+        cq = cq.distinct()
 
 
+        ## the goal of these is to strip out parts of the file names we know
+        ## to be representative of the individual files while leaving the
+        ## common subject components entact.  Some posts specify files parts of
+        ## a post, some specify file size of file.  Many provide none of this 
+        ## info, so for now we're ignoring all of it.
+
+        ## TODO: possibly use the filepart data when available to more fully 
+        ## populate the auto-Report
         kiss_subject = tuple([re.compile(r, re.I) for r in (
-                                    r'(.*)\s*<\s*\d+\s*/\s*\d+\s*\(.*\)\s*>\s*<\s*.*\s*>(.*)',
-                                    r'(.*)\s*\[\s*\d+\s*/\s*\d+\s*\]\s*(.*)',
-                                    r'(.*)(?:\.part\d+|\.vol\d+\+\d+)?\.(?:par2|r(?:ar|\d+))(.*)',
-                                    r'(.*)[\.-]sample\.\.{3}(.*)',
-                                )])
+            r'''(.*)\s*<\s*\d+\s*/\s*\d+\s*\(.*\)\s*>\s*<\s*.*\s*>\s*(.*)''',
+            r'''(.*)\s*\[\s*\d+\s*(?:/|of)\s*\d+\s*\]\s*(.*)''',
+            r'''(.*)(?:\.part\d+|\.vol\d+\+\d+)\s*(.*)''',
+            r'''(.*)\.[a-z0-9_]{2,4}\s*(.*)''',
+            r'''(.*)[\.-]sample(.*)''',
+        )])
 
-        offset = 0
-        limit = 50
         total = cq.count()
-        while offset < total:
-            log.info('Files: %s - %s' % (offset, (offset+limit)))
-            for file_rec in cq[offset:(offset+limit)]:
-                offset += 1
-                stats['processed'] += 1
+        log.info('Files: %s' % total)
+        for file_rec in cq.all():
+            stats['processed'] += 1
 
-                #log.debug('%s:%s' % (file_rec.subject, file_rec.articles.count()))
-                if not file_rec.articles.count():
-                    log.info('Deleting empty file %s' % file_rec.subject)
-                    self._sql.delete(file_rec)
-                    stats['deleted'] += 1
-                    continue
+            if not (stats['processed'] % 100):
+                log.debug('FLUSH')
+                self._sql.commit()
 
-
-                log.info(file_rec.subject)
+            if not file_rec.articles.count():
+                log.info('Deleting empty file %s' % file_rec.subject)
+                self._sql.delete(file_rec)
+                stats['deleted'] += 1
                 continue
 
-                ## look for x of y patterns in subject + parse out
-                ## also look at file extension, if subject matches  and has
-                ## a .r(ar|\d) extension
-                subject = file_rec.subject
-                kissed = False
-                for kiss in kiss_subject:
-                    match = re.match(kiss, subject)
-                    if match:
-                        kissed = True    
-                        subject = ''.join(match.groups())
+            ## look for x of y patterns in subject + parse out
+            ## also look at file extension, if subject matches  and has
+            ## a .r(ar|\d) extension
+            subject = file_rec.subject
+            kissed = False
+            for kiss in kiss_subject:
+                match = re.match(kiss, subject)
+                if match:
+                    kissed = True    
+                    subject = ''.join(match.groups(''))
 
-                if not kissed:
-                    log.error("Couldn't parse %s" % subject)
-                    raise Exception
-                else:
-                    log.debug("Parsed: %s" % subject)
-                ## get or create report with cleaned article subject
+            if not kissed:
+                log.error("Couldn't parse %s" % file_rec.subject)
+                raise Exception
+            else:
+                log.debug("Parsed: %s" % subject)
+            ## get or create report with cleaned article subject
+            report = storage.sql.get_or_create(self._sql,
+                                                storage.sql.Report,
+                                                subject=subject)
 
-                ## asscociate file with report if not already linked
+            ## asscociate file with report if not already linked
+            mutator = {}
+            ## relations
+            for group in file_rec.newsgroups:
+                if not report.newsgroups.filter_by(id=group.id).count():
+                    report.newsgroups.append(group)
 
-                if not (offset % 100):
-                    log.debug('FLUSH')
-                    self._sql.commit()
+            if not report.files.filter_by(id=file_rec.id).count():
+                mutator['bytes_'] = report.bytes_ + file_rec.bytes_
+                file_rec.report = report
+
+            for k, v in mutator.items():
+                setattr(report, k, v)
+
+            log.debug('Report << %s >>' % subject)
 
         self._sql.commit()
 
         return stats
+
