@@ -23,18 +23,26 @@ class ImmutableObject(object):
             super(ImmutableObject, self).__setattr__(k, v)
 
 
-class PyNZBResponse(object):
+class Request(ImmutableObject):
+    pass
+
+
+class Response(object):
     status_code = 200
     body = u''
     content_type = 'text/html'
     headers = {}
 
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
 
 
-class PyNZBRequest(ImmutableObject):
-    pass
+class Redirect(Response):
+    status_code = 301
+
+    def __init__(self, location, *args, **kwargs):
+        super(Redirect, self).__init__(*args, **kwargs)
+        self.headers.update({'Location': location})
 
 

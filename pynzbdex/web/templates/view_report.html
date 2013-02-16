@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block body %}
+{% block content %}
 <a href="{{ 'report_view'|url(report.key) }}?delete=1">delete</a>
     <div class="row-fluid">
         <div class="span3">subject:</div><div class="span9">{{ report.subject }}</div>
@@ -10,9 +10,6 @@
     </div>
     <div class="row-fluid">
         <div class="span3">newsgroups:</div><div class="span9">{% for ng in report.newsgroups %}{{ ng }}{% endfor %}</div>
-    </div>
-    <div class="row-fluid">
-        <div class="span3">poster:</div><div class="span9">{{ report.from_ }}</div>
     </div>
     <div class="row-fluid">
         <div class="span3">size:</div><div class="span9">{{ report.bytes_|humansize }}</div>

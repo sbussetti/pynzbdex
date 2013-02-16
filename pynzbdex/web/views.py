@@ -19,6 +19,7 @@ from jinja2 import Template, Environment, PackageLoader
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import DeferredReflection
+from sqlalchemy.sql.expression import func
 
 from pynzbdex import storage, settings
 from pynzbdex.web import http
@@ -27,11 +28,11 @@ from pynzbdex.web.template import templates
 
 log = logging.getLogger(__name__)
 
-class PyNZBDexViewsBase(object):
+class ViewsBase(object):
     methods = ['GET', 'POST']
 
     def __init__(self, *args, **kwargs):
-        super(PyNZBDexViewsBase, self).__init__(*args, **kwargs)
+        super(ViewsBase, self).__init__(*args, **kwargs)
 
     def storage_setup(self):
         sql_cfg = settings.DATABASE['default']
@@ -71,24 +72,30 @@ class PyNZBDexViewsBase(object):
         tmpl = templates.get_template(name)
         return tmpl.render(**ctx)
 
-    def render(self, ctx={}, status=200, content_type='text/html', headers={}):
+    def render(self, ctx, request, status=200, content_type='text/html', headers={}):
         if self.template_name:
+            ## CONTEXT PROCESSORS
+            ctx.update({'request': request}) 
+
             body = self.render_template(self.template_name, ctx)
         else:
             body = unicode(ctx)
-        return http.PyNZBResponse(body=body, status_code=status,
+        return http.Response(body=body, status_code=status,
                                   content_type=content_type, headers=headers)
         
 
-class PyNZBDexHome(PyNZBDexViewsBase):
+class Home(ViewsBase):
     template_name = 'index.html'
 
-    def dispatch(self, request, **kwargs):
-        return self.render()
+    def get(self, request, **kwargs):
+        #woah does this need to be cached
+        groups = self._sql.query(storage.sql.Group, 'name', func.count(storage.sql.group_reports.c.report_id).label('total')).join(storage.sql.group_reports).group_by(storage.sql.Group).order_by('name ASC')
+
+        return self.render({'groups': groups}, request)
 
 
-class PyNZBDexSearchGroup(PyNZBDexViewsBase):
-    template_name = 'search_group.html'
+class SearchGroups(ViewsBase):
+    template_name = 'search_groups.html'
 
     def get(self, request, *args, **kwargs):
         query = request.GET.get('q', None)
@@ -96,19 +103,42 @@ class PyNZBDexSearchGroup(PyNZBDexViewsBase):
         page = int(request.GET.get('p', 1) or 1)
         per_page = int(request.GET.get('pp', 25) or 25)
 
+        raise NotImplementedError
+
         pager = PagedResults(query, sort, page, per_page)
 
         return self.render({'results': pager.all(),
                             'pager': pager,
                             'today': datetime.datetime.today(),
                             'group': group,
-                            'request': request,  })
+                            }, request)
 
 
-class PyNZBDexSearch(PyNZBDexViewsBase):
+class SearchRoute(ViewsBase):
+    def post(self, *args, **kwargs):
+        return self.get(*args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        query = request.REQUEST.get('q', None)
+        doctype = request.REQUEST.get('dt', None)
+        group = request.REQUEST.get('g', None)
+
+        if not doctype or not query:
+            return http.Redirect(request.headers['referer'])
+        else:
+            ##TODO: sloppy
+            from pynzbdex.web.router import router
+            if group:
+                url_base = router.url_reverse('search_group', doctype, group)
+            else:
+                url_base = router.url_reverse('search', doctype)
+            return http.Redirect('%s?q=%s' % (url_base, query))
+
+
+class Search(ViewsBase):
     template_name = 'search.html'
 
-    def get(self, request, group_name, doctype, *args, **kwargs):
+    def get(self, request, doctype, group_name=None, *args, **kwargs):
         query = request.GET.get('q', '')
         sort = request.GET.get('s', 'date desc')
         page = int(request.GET.get('p', 1) or 1)
@@ -116,14 +146,18 @@ class PyNZBDexSearch(PyNZBDexViewsBase):
         source = request.GET.get('src', 'sql')
         ## doctype one of article, file, report
 
-        group = storage.riak.Group.get(group_name)
+        group = None
+        if group_name:
+            group = storage.riak.Group.get(group_name)
 
         #group = storage.sql.get(self._sql, storage.sql.Group,
         #                        name=group_name)
 
         if doctype == 'article':
-            cq = self._sql.query(storage.sql.Article)\
-                        .filter(storage.sql.Article.newsgroups.any(name=group_name))
+            cq = self._sql.query(storage.sql.Article)
+
+            if group_name:
+                cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name))
             ## coverage stats
             ## this is not accurate per- se as last_stored resets on
             ## every pass ... need to keep better count
@@ -141,16 +175,18 @@ class PyNZBDexSearch(PyNZBDexViewsBase):
             if query:
                 cq = cq.filter(storage.sql.Article.subject.like('%%%s%%' % query))
         elif doctype == 'file':
-            cq = self._sql.query(storage.sql.File)\
-                        .filter(storage.sql.File.newsgroups.any(name=group_name))
+            cq = self._sql.query(storage.sql.File)
+            if group_name:
+                cq = cq.filter(storage.sql.File.newsgroups.any(name=group_name))
             ## TODO file stats will be just the percentage of articles with
             ## and without association to a file
             stats = {}
             if query:
                 cq = cq.filter(storage.sql.File.subject.like('%%%s%%' % query))
         elif doctype == 'report':
-            cq = self._sql.query(storage.sql.Report)\
-                        .filter(storage.sql.Report.newsgroups.any(name=group_name))
+            cq = self._sql.query(storage.sql.Report)
+            if group_name:
+                cq = cq.filter(storage.sql.Report.newsgroups.any(name=group_name))
             ## TODO stats
             stats = {}
 
@@ -170,11 +206,11 @@ class PyNZBDexSearch(PyNZBDexViewsBase):
                             'group': group,
                             'stats': stats,
                             'doctype': doctype,
-                            'request': request,
-                            'query': query})
+                            'query': query},
+                           request)
 
 
-class PyNZBDexViewArticle(PyNZBDexViewsBase):
+class ViewArticle(ViewsBase):
     template_name = 'view_article.html'
 
     def get(self, request, mesg_id, *args, **kwargs):
@@ -185,11 +221,10 @@ class PyNZBDexViewArticle(PyNZBDexViewsBase):
         if delete:
             article.delete()
 
-        return self.render({'request': request,
-                            'article': article})
+        return self.render({'article': article}, request)
 
 
-class PyNZBDexViewFile(PyNZBDexViewsBase):
+class ViewFile(ViewsBase):
     template_name = 'view_file.html'
 
     def get(self, request, id, *args, **kwargs):
@@ -200,11 +235,10 @@ class PyNZBDexViewFile(PyNZBDexViewsBase):
         if delete:
             self._sql.delete(file_rec)
 
-        return self.render({'request': request,
-                            'file': file_rec})
+        return self.render({'file': file_rec}, request)
 
 
-class PyNZBDexViewReport(PyNZBDexViewsBase):
+class ViewReport(ViewsBase):
     template_name = 'view_report.html'
 
     def get(self, request, id, *args, **kwargs):
@@ -215,11 +249,10 @@ class PyNZBDexViewReport(PyNZBDexViewsBase):
         if delete:
             self._sql.delete(report)
 
-        return self.render({'request': request,
-                            'report': report})
+        return self.render({'report': report}, request)
 
 
-class PyNZBDexMakeNZB(PyNZBDexViewsBase):
+class MakeNZB(ViewsBase):
     template_name = None
 
     '''
@@ -302,7 +335,7 @@ class PyNZBDexMakeNZB(PyNZBDexViewsBase):
                              pretty_print=True,
                              doctype='<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">')    
         
-        return self.render(xml_string, content_type='application/xml',
+        return self.render(xml_string, request, content_type='application/xml',
                            headers={'Content-Disposition': 'attachment; filename="%s.nzb"' % title})
 
 class PagedResults(object):

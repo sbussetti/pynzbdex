@@ -1,18 +1,6 @@
 {% extends "base.html" %}
 
-{% block body %}
-<div class="navbar">
-  <div class="navbar-inner">
-    <a class="brand" href="#">pynzbdex</a>
-    <ul class="nav">
-    <li>
-        <form method="GET" class="navbar-search pull-left">
-        <input name="q" type="text" value="{{ query }}" class="search-query" placeholder="search"/><a href="{{ request.path }}">x</a>
-        </form>
-    </li>
-    </ul>
-  </div>
-</div>
+{% block content %}
 
 <div class="row-fluid">
     <div class="group_info span6">
@@ -109,7 +97,7 @@
                     </div>
                     <div>
                     {% for g in res.newsgroups %}
-                        <a href="{{ 'search'|url(doctype, g) }}">{{ g }}</a>
+                        <a href="{{ 'search_group'|url(doctype, g) }}">{{ g }}</a>
                     {% endfor %}
                     </div>
                     <div>

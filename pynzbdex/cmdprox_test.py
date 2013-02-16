@@ -2,7 +2,7 @@
 import logging
 
 from pynzbdex.pynntpcli import NNTPProxyClient
-from pynzbdex import settings
+from pynzbdex import settings, aggregator
 
 logging.basicConfig(format=('%(levelname)s:(%(name)s.%(funcName)s) '
                             '%(message)s'), level='DEBUG')
@@ -14,3 +14,7 @@ nntp = NNTPProxyClient(host=nntp_cfg['HOST'],
 
 
 print nntp.group('alt.binaries.teevee')
+
+ag = aggregator.Aggregator()
+ag._sql
+

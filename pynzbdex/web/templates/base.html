@@ -53,13 +53,43 @@
 
 .group_info {
 }
+
+
+.navbar select[name=dt] {
+    width:90px;
+    margin-bottom: 0px;
+}
+
+
 </style>
 <link href="//netdna.bootstrapcdn.com/twitter-bootstrap/2.2.2/css/bootstrap-combined.min.css" rel="stylesheet">
 <script src="//netdna.bootstrapcdn.com/twitter-bootstrap/2.2.2/js/bootstrap.min.js"></script>
 {% endblock %}</head>
-<body>
+<body>{% block body %}
     <div class="container-fluid">
-    {% block body %}{% endblock %}
+{% block navbar %}
+        <div class="navbar">
+          <div class="navbar-inner">
+            <a class="brand" href="/">pynzbdex</a>
+            <ul class="nav">
+            <li>
+                <form method="POST" class="navbar-search pull-left" action="{{ 'search_route'|url() }}">
+                <input name="q" type="text" value="{{ query }}" class="search-query" placeholder="search"/>
+                <select name="dt">
+                    {% for dt in ['report', 'file', 'article'] %}
+                    <option value="{{ dt }}" {% if dt == doctype %}SELECTED="SELECTED"{% endif %}>{{ dt }}s</option>
+                    {% endfor %}
+                </select>
+                <a href="{{ request.path }}">x</a>
+                </form>
+            </li>
+            </ul>
+          </div>
+        </div>
+{% endblock navbar %}
+{% block content %}
+{% endblock %}
     </div>
+{% endblock %}
 </body>
 </html>

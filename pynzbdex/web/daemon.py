@@ -41,12 +41,12 @@ class PyNZBDexHandler(BaseHTTPRequestHandler):
 
         view, args, kwargs = router.url_forward(req.path)
         
-        resp = http.PyNZBResponse(status_code=404)
+        resp = http.Response(status_code=404)
         if view:
             try:
                 resp = view(req, *args, **kwargs)
             except:
-                resp = http.PyNZBResponse(body=traceback.format_exc(),
+                resp = http.Response(body=traceback.format_exc(),
                                           status_code=500,
                                           content_type='text/plain')
         log.debug([resp.status_code, resp.content_type])
@@ -88,7 +88,7 @@ class PyNZBDexHandler(BaseHTTPRequestHandler):
         return size
 
     def get_request(self, post_data=''):
-        log.debug(['PD', post_data])
+        log.debug(['POST DATA', post_data])
         ## parse path..
         p = urlparse.urlparse(self.path)
         q_get = OrderedDict(urlparse.parse_qs(p.query))
@@ -106,11 +106,12 @@ class PyNZBDexHandler(BaseHTTPRequestHandler):
                 q_post[k] = v[0]
 
         q_request = OrderedDict(q_get.items() + q_post.items())
-        return http.PyNZBRequest(
+
+        return http.Request(
                     client_address=self.client_address,
                     server=self.server,
                     method=self.command,
-                    headers=self.headers,
+                    headers=dict(self.headers),
                     path=p.path,
                     ## OrderedDict..
                     GET=q_get,

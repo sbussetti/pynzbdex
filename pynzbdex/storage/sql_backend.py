@@ -5,8 +5,9 @@ from sqlalchemy.ext.declarative import (declarative_base,
                                         DeferredReflection,
                                         declared_attr, synonym_for)
 from sqlalchemy.orm import relationship 
-from sqlalchemy import (Column, Integer, String, DateTime,
-                        ForeignKey, Table, Boolean, UniqueConstraint)
+from sqlalchemy import (Column, Integer, BigInteger, Unicode, DateTime, String,
+                        ForeignKey, Table, Boolean, UniqueConstraint, Index)
+from sqlalchemy.sql import exists as sqla_exists
 
 
 log = logging.getLogger(__name__)
@@ -20,15 +21,21 @@ class MultipleFoundError(Exception):
     pass
 
 
+def exists(session, where):
+    return session.query(sqla_exists().where(where)).scalar()
+
+
 def get_or_create(session, model, defaults={}, **kwargs):
     '''get a single object or create if it does not exist'''
     try:
         instance = get(session, model, **kwargs)
+        created = False
     except NotFoundError:
         ckwargs = dict(defaults, **kwargs)
         instance = model(**ckwargs)
         session.add(instance)
-    return instance
+        created = True
+    return instance, created
 
 def get_and_delete(session, model, *args, **kwargs):
     '''get a single object and delete if exists'''
@@ -88,19 +95,46 @@ group_reports = Table('group_reports', Base.metadata,
 )
 
 class Group(Base):
-    name = Column(String(length=255, convert_unicode=True),
+    name = Column(Unicode(length=255),
                     nullable=False, unique=True)
 
     def __repr__(self):
         return u'%s' % self.name
 
 
-class File(Base):
-    __table_args__ = (
-            UniqueConstraint('subject', 'from_'),
-        )
+class Article(Base):
+    mesg_spec = Column(Unicode(length=255), nullable=False, unique=True)
+    subject = Column(Unicode(length=511), nullable=False)
+    from_ = Column(Unicode(length=127), nullable=False)
+    bytes_ = Column(BigInteger, nullable=False, default=0)
+    date = Column(DateTime(timezone='UTC'), nullable=False)
+    part = Column(Integer, nullable=True) ## part X of..
+    newsgroups = relationship(Group,
+                          secondary=group_articles,
+                          lazy='dynamic',
+                          backref='articles')
+    file_id = Column(Integer,
+                    ForeignKey('file.id', ondelete='SET NULL'),
+                    nullable=True)
 
-    subject = Column(String(length=255, convert_unicode=True), nullable=False)
+    def __repr__(self):
+        return u'%s' % self.subject
+
+    @synonym_for('mesg_spec')
+    @property
+    def key(self):
+        return self.mesg_spec
+
+
+class File(Base):
+    __table_args__ = ()
+
+    subject = Column(Unicode(length=511), nullable=False)
+    from_ = Column(Unicode(length=127), nullable=False)
+
+    subj_key = Column(String(length=767, collation='latin1_swedish_ci'),
+                      nullable=True, unique=True)
+
     complete = Column(Boolean, default=False, nullable=False)
     parts = Column(Integer, nullable=True) ## ... of X parts
     articles = relationship('Article', 
@@ -110,8 +144,7 @@ class File(Base):
                           secondary=group_files,
                           lazy='dynamic',
                           backref='files')
-    from_ = Column(String(length=255, convert_unicode=True), nullable=False)
-    bytes_ = Column(Integer, nullable=False, default=0)
+    bytes_ = Column(BigInteger, nullable=False, default=0)
     date = Column(DateTime(timezone='UTC'), nullable=False)
     report_id = Column(Integer,
                     ForeignKey('report.id', ondelete='SET NULL'),
@@ -126,37 +159,12 @@ class File(Base):
         return self.id
 
 
-class Article(Base):
-    mesg_spec = Column(String(length=255, convert_unicode=True), nullable=False, unique=True)
-    subject = Column(String(length=511, convert_unicode=True), nullable=False)
-    from_ = Column(String(length=255, convert_unicode=True), nullable=False)
-    bytes_ = Column(Integer, nullable=False, default=0)
-    date = Column(DateTime(timezone='UTC'), nullable=False)
-    part = Column(Integer, nullable=True) ## part X of..
-    newsgroups = relationship(Group,
-                          secondary=group_articles,
-                          lazy='dynamic',
-                          backref='articles')
-    ##TODO: CONSIDER SETTING TO 0 OR DELETING TO AVOID CHURN..
-    file_id = Column(Integer,
-                    ForeignKey('file.id', ondelete='SET NULL'),
-                    nullable=True)
-
-    def __repr__(self):
-        return u'%s' % self.subject
-
-    @synonym_for('mesg_spec')
-    @property
-    def key(self):
-        return self.mesg_spec
-
-
 class Report(Base):
     __table_args__ = (
             UniqueConstraint('subject'),
         )
 
-    subject = Column(String(length=255, convert_unicode=True), nullable=False)
+    subject = Column(Unicode(length=255), nullable=False)
     complete = Column(Boolean, default=False, nullable=False)
     files = relationship('File', 
                           lazy='dynamic',
@@ -165,7 +173,7 @@ class Report(Base):
                           secondary=group_reports,
                           lazy='dynamic',
                           backref='reports')
-    bytes_ = Column(Integer, nullable=False, default=0)
+    bytes_ = Column(BigInteger, nullable=False, default=0)
     date = Column(DateTime(timezone='UTC'), nullable=False, default=datetime.today())
 
     def __repr__(self):

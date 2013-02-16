@@ -19,23 +19,30 @@ JOB_SIZE = 10000
 WORKERS = {}
 PROC_TITLE_BASE = os.path.basename(__file__)
 
-def spawn_scraper(q, i, *args, **kwargs):
+
+def spawn_article_scanner(q, i, *args, **kwargs):
+    if kwargs.get('resume', False):
+        kwargs['offset'] = i * JOB_SIZE
+        kwargs['max_processed'] = JOB_SIZE
+
     ag = aggregator.Aggregator()
     res = ag.scrape_articles(*args, **kwargs)
     q.put(res)
     del ag
 
-def spawn_processor(q, i, *args, **kwargs):
+def spawn_redis_processor(q, i, *args, **kwargs):
     # be nice
-    time.sleep(30)
+    time.sleep(15)
     ag = aggregator.Aggregator()
+    ## index starts @ zero, but redis wants a step >= 1
+    kwargs['step'] = i + 1 
     res = ag.process_redis_cache(*args, **kwargs)
     q.put(res)
     del ag
 
 def spawn_article_grouper(q, i, *args, **kwargs):
     # be nice
-    time.sleep(30)
+    #time.sleep(15)
     ag = aggregator.Aggregator()
     res = ag.group_articles(*args, **kwargs)
     q.put(res)
@@ -56,9 +63,6 @@ def marshall_worker(func, kind, index, group, conf):
     if scanid in WORKERS:
         raise RuntimeError('Scanner ID collision: [%s]' % scanid)
 
-    if conf.get('resume', False):
-        conf['offset'] = index * JOB_SIZE
-        conf['max_processed'] = JOB_SIZE
     q = Queue()
     p = Process(name='%s - %s' % (PROC_TITLE_BASE, scanid),
                 target=func,
@@ -81,73 +85,69 @@ def marshall_worker(func, kind, index, group, conf):
 if __name__ == '__main__':
     setproctitle(PROC_TITLE_BASE)
 
+    #from pynzbdex import storage
+    #from sqlalchemy.schema import CreateTable
+    #print CreateTable(storage.sql.File.__table__)
+
+
     ## ARTICLE WORK
     ## For now this list is hard coded. But would be based on
     ## each group object's Active flag.
     worker_config = dict(
-        full_scan=[spawn_scraper,
+        full_scan=[spawn_article_scanner,
                         dict( 
                         resume=False,
                         get_long_headers=True,
                         invalidate=True,
                         cached=False)],
-        cache_scan=[spawn_scraper,
+        cache_scan=[spawn_article_scanner,
                         dict(
                         resume=False,
                         get_long_headers=True,
                         invalidate=True,
                         cached=True)],
-        resume_scan=[spawn_scraper,
+        resume_scan=[spawn_article_scanner,
                         dict(
                         resume=True,
                         get_long_headers=True,
                         invalidate=False,
                         cached=True)],
         ## SHORT HEADERS ONLY
-        invalidate_scan=[spawn_scraper,
+        invalidate_scan=[spawn_article_scanner,
                         dict(
                         resume=False,
                         get_long_headers=False,
                         invalidate=True,
                         cached=True)],
-        quick_scan=[spawn_scraper,
+        quick_scan=[spawn_article_scanner,
                         dict(
                         resume=True,
                         get_long_headers=False,
                         invalidate=False,
                         cached=True)],
-        quick_invalidate_scan=[spawn_scraper,
+        quick_invalidate_scan=[spawn_article_scanner,
                         dict(
                         resume=True,
                         get_long_headers=False,
                         invalidate=True,
                         cached=True)],
-        quick_full_scan=[spawn_scraper,
+        quick_full_scan=[spawn_article_scanner,
                         dict(
                         resume=False,
                         get_long_headers=False,
                         invalidate=False,
                         cached=False)],
         ## PROCESSORS (Different Signature)
-        redis_process=[spawn_processor,
+        redis_process=[spawn_redis_processor,
                         dict()],
+
+        ## TODO: article and file processors should perhaps
+        ## be limited to only a single instance, ever.
         article_process=[spawn_article_grouper,
                         dict(
-                        full_scan=False,
-                        complete_only=False
-                        )],
-        full_article_process=[spawn_article_grouper,
-                        dict(
-                        full_scan=True,
-                        complete_only=False
                         )],
         file_process=[spawn_file_grouper,
                         dict(
-                        full_scan=False,
-                        )],
-        full_file_process=[spawn_file_grouper,
-                        dict(
-                        full_scan=True,
                         )],
         )
     ## options
@@ -176,7 +176,7 @@ if __name__ == '__main__':
     ## GROUP WORK
     if args.group_scan:
         ag = aggregator.Aggregator()
-        ag.scrape_groups(invalidate=False)
+        ag.scrape_groups(invalidate=True, refresh=True)
         del ag
     
     roster = []

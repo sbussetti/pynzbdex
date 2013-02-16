@@ -8,8 +8,8 @@ import riak
 from pynzbdex import settings
 
 
-BACKEND = 'HTTP'
-#BACKEND = 'PBC'
+#BACKEND = 'HTTP'
+BACKEND = 'PBC'
 
 class ClientWrapper(object):
     _cw_client = None
@@ -56,6 +56,7 @@ class Group(DocBase):
     ## NNTP metadata
     # groupname is the key.. and is unique
     #group = StringProperty(required=True, unique=True)
+    name = StringProperty(required=True)
     count = IntegerProperty(default=0)
     first = IntegerProperty(default=0)
     ## could be none
@@ -66,8 +67,6 @@ class Group(DocBase):
     ## metaprop for resumption (ID of the last article we processed)
     last_stored = IntegerProperty()
 
-    ## audit/control
-    active = BooleanProperty(default=False)
     ## riakkit automatically defaults to now, left alone 
     last_indexed = DateTimeProperty(default=None)
 

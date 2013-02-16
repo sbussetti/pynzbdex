@@ -25,8 +25,10 @@ Service Dependencies
                     https://github.com/basho/riak_function_contrib/blob/master/mapreduce/erlang/delete_keys.erl
  * mysql:   expects all schemas to be UTF8
  * redis:   runs in cache mode (implicit TTL)
-            maxmemory 32mb
-            maxmemory-policy allkeys-lru
+            #maxmemory 32mb
+            #maxmemory-policy allkeys-lru
+            maxmemory 256mb
+            maxmemor-policy never-expire
 
 
 Service Architecture
@@ -37,7 +39,7 @@ Service Architecture
 
             ...
 
-    [redis] ---> [pynzbdex/cmdpop] ---> [mysql] (decompose redis msg [json string] into standard relational model, [or mark as deleted])
+    [redis] ---> [pynzbdex/cmdpop] ---> [mysql] (decompose redis msg [pickle string] into standard relational model, [or mark as deleted])
 
 Assembly Strategies and Notes
 -----------------------------
@@ -59,3 +61,40 @@ Included if:
 * subject includes filename extensions: these "hints" are used to help identify, not required like the previous item.
     (".gif", ".jpg", ".jpeg", ".gl", ".zip", ".au", ".zoo",
     ".exe", ".dl", ".snd", ".mpg", ".mpeg", ".tiff", ".lzh", ".wav" )
+
+
+
+#CREATE DATABASE `pynzbdex` /*!40100 DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci */
+
+#`subj_key` varchar(767) CHARACTER SET latin1 DEFAULT NULL AFTER from_
+
+# UNIQUE KEY `subj_key` (`subj_key`),
+
+from pynzbdex import storage
+from sqlalchemy.schema import CreateTable
+print CreateTable(storage.sql.File.__table__)
+
+
+-> need new scanner that just sees if there is a riak article backing the sql article.. simple loop over all articles...
+
+-> factor out article deletion cascade/count
+
+-> consider refactoring aggregator to make each scanner/processor class-based
+
+-> fix "index completion" graphic
+ -> check math, etc..
+ -> files -> # of file records wrt # of articles grouped by association
+ -> reports -> same but for report -> file
+
+
+
+/etc/profile
+# addl custom
+PATH="$PATH:/opt/riak/bin"
+export PATH 
+
+search-cmd install article
+search-cmd install group
+
+search-cmd set-schema article schema/article.erl
+search-cmd set-schema group schema/group.erl

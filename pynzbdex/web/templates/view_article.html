@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block body %}
+{% block content %}
 <a href="{{ 'article_view'|url(article.key) }}?delete=1">delete</a>
     <div class="row-fluid">
         <div class="span4">message id:</div><div class="span8">{{ article.key }}</div>

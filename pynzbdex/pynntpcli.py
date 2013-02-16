@@ -124,6 +124,8 @@ class NNTPProxyClient(object):
         ## and receives response.
         
         ## SEND
+
+        ## TODO: should output also be sent via bytestring? think yes.
         req = {u'CMD': cmd}
         if arg is not None:
             req[u'ARG'] = arg

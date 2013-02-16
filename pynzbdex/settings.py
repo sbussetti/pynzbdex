@@ -1,7 +1,7 @@
 
 REDIS = {
         'default' : {
-            'HOST' : 'sol-serv',
+            'HOST' : 'localhost',
             'PORT' : 6379,
             'DB' : 1
         }
@@ -22,7 +22,7 @@ RIAK = {
 
 DATABASE = {
         'default' : {
-            'HOST' : 'sol-serv',
+            'HOST' : 'sol-db',
             'PORT' : 3306,
             'USER' : 'pynzbdex',
             'PASS' : 'pynzbdex',

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block body %}
+{% block content %}
 <a href="{{ 'file_view'|url(file.key) }}?delete=1">delete</a>
     <div class="row-fluid">
         <div class="span3">subject:</div><div class="span9">{{ file.subject }}</div>

@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 
-{% block body %}
-Hellow.
+{% block content %}
+<div class="row-fluid">
+    <div class="span12">
+    {% for group in groups %}
+    <p><a href="{{ 'search_group'|url('report', group.name) }}">{{ group.name }}</a>: {{ group.total }} reports</p>
+    {% endfor %}
+    </div>
+</div>
 {% endblock %}
