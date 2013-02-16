@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 # don't move these to settings for now.. yes they are
 # for tuning, but there are so many tunings that won't work
 # that this may not be configurable
-redis_indexbuckets = 10000
+redis_indexbuckets = 1000
 nntp_chunksize = 1000
 riak_chunksize = 1000
 sql_chunksize = 10000
@@ -847,7 +847,6 @@ class Aggregator(object):
                     try:
                         file_rec = storage.sql.get(self._sql, storage.sql.File,
                                                    subj_key=(name+article.from_))
-                        log.debug('GOT FILE')
                     except storage.sql.NotFoundError:
                         file_rec = storage.sql.File(subject=name,
                                                     from_=article.from_,
@@ -855,7 +854,6 @@ class Aggregator(object):
                                                     date=article.date,
                                                     parts=parts)
                         ## must be in session before we add related items..
-                        log.debug('NEW FILE')
                         self._sql.add(file_rec)
 
                     ## stats
