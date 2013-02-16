@@ -1,7 +1,7 @@
 
 REDIS = {
         'default' : {
-            'HOST' : 'localhost',
+            'HOST' : 'sol-db',
             'PORT' : 6379,
             'DB' : 1
         }
