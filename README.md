@@ -10,9 +10,12 @@ Service Dependencies
 
 * Binary Library Dependencies
  * Protobuf: riak client requires protobuf is installed
-  * Arch: protobuf-2.4.1-2 or newer
+  * Arch: protobuf-2.4.1-2 or newer (community/protobuf)
 
 * Python Library Dependencies
+ * For Arch, better to install dist for these:
+   * extra/python2-lxml
+ * Until SQL alchemy bumps their official version to 0.8: http://pypi.python.org/pypi/SQLAlchemy/0.8.0b2
  * See requirements.txt
 
 * Config Dependencies:   
