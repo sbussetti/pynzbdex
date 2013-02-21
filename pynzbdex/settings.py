@@ -16,7 +16,7 @@ NNTP_PROXY = {
 
 RIAK = {
         'default' : {
-            'HOST' : 'sol-serv',
+            'HOST' : 'sol-db',
         }
     }
 

@@ -27,11 +27,14 @@
     </div>
 </div>
 
-<form action="{{ 'make_nzb'|url() }}" method="POST">
+<form action="" method="POST">
 <div class="row-fluid">
     <div class="span12">
         <div class="results table">
             <div class="table-row row-header">
+                <div class="cell">
+                    <input type="checkbox" value="1" id="check-all"/>
+                </div>
                 <div class="cell">
                     <div class="left">
                     Size
@@ -67,12 +70,16 @@
                 </div>
             </div>
             <div class="table-row centered">
+                <div class="cell"> </div>
                 <div class="cell">
-                    {% if doctype == 'file' %}
-                        <input type="submit" value="Create NZB"/>
-                    {% endif %}
                 </div>
                 <div class="cell">
+                    {% if doctype == 'file' %}
+                        <button name="a" value="nzb">create nzb</button>
+                        <button name="a" value="del">delete files</button>
+                    {% elif doctype == 'report' %}
+                        <button name="a" value="del">delete reports</button>
+                    {% endif %}
                     {{ today|date }}
                 </div>
                 <div class="cell"> </div>
@@ -80,9 +87,11 @@
             {% for res in results %}
             <div class="table-row">
                 <div class="cell">
-                    {% if doctype == 'file' %}
+                    {% if doctype in ['file', 'report'] %}
                         <input name="f" type="checkbox" value="{{ res.id }}"/>
                     {% endif %} 
+                </div>
+                <div class="cell">
                     ({{ res.bytes_|humansize }})
                 </div>
                 <div class="cell">

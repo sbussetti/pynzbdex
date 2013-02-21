@@ -137,6 +137,111 @@ class SearchRoute(ViewsBase):
 
 class Search(ViewsBase):
     template_name = 'search.html'
+    '''
+        NZB format as listed by sabnzbd
+        (DTD mirror: http://www.usenetshack.com/media/docs/DTD/nzb/nzb-1.1.dtd)
+
+        <?xml version="1.0" encoding="iso-8859-1" ?>
+        <!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
+        <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+         <head>
+           <meta type="title">Your File!</meta>
+           <meta type="tag">Example</meta>
+         </head>
+         <file poster="Joe Bloggs &amp;lt;bloggs@nowhere.example&amp;gt;" date="1071674882" subject="Here's your file!  abc-mr2a.r01 (1/2)">
+           <groups>
+             <group>alt.binaries.newzbin</group>
+             <group>alt.binaries.mojo</group>
+           </groups>
+           <segments>
+             <segment bytes="102394" number="1">123456789abcdef@news.newzbin.com</segment>
+             <segment bytes="4501" number="2">987654321fedbca@news.newzbin.com</segment>
+           </segments>
+         </file>
+        </nzb>
+    '''
+
+    def post(self, request, doctype, group_name=None, *args, **kwargs):
+        ids = request.POST.get('f', [])
+        action = request.POST.get('a', '')
+
+        if not ids:
+            raise ValueError('At least one id required')
+
+        #TODO: dum
+        if action == 'nzb':
+            if not isinstance(ids, list):
+                ids = [ids, ]
+
+            ## expects a list of IDs for report and file records
+            ## files, gather lists of associated articles.
+            files = []
+            title = 'selected_files_%s' % int(time.time())
+            if doctype == 'report':
+                files = self._sql.query(storage.sql.File)\
+                            .filter_by(report_id=ids[0])\
+                            .order_by(storage.sql.File.subject).all()
+            elif doctype == 'file':
+                files = self._sql.query(storage.sql.File)\
+                                .filter(storage.sql.File.id.in_(ids))\
+                                .order_by(storage.sql.File.subject).all()
+            else:
+                raise ValueError('Unknown doctype: %s' % doctype)
+
+            ##TODO: factor nzb builder out into its own class
+            from lxml import etree
+
+            tree = etree.XML('''\
+            <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
+            </nzb>
+            ''')
+
+            head = etree.SubElement(tree, 'head')
+            etree.SubElement(head, 'meta', {'type': 'title'}).text = title
+
+            for file_rec in files:
+                file_ele = etree.SubElement(tree, 'file',
+                                {'poster': file_rec.from_, 
+                                 'date': u'%d' % time.mktime(file_rec.date.timetuple()), 
+                                 'subject': file_rec.subject})
+                groups = etree.SubElement(file_ele, 'groups')
+                for group in file_rec.newsgroups.order_by(storage.sql.Group.name).all():
+                    etree.SubElement(groups, 'group').text = group.name
+
+                segments = etree.SubElement(file_ele, 'segments')
+                for segment in file_rec.articles.order_by(storage.sql.Article.part).all():
+                    log.debug([segment.bytes_, segment.part, segment.mesg_spec])
+                    etree.SubElement(segments, 'segment',
+                                {'bytes': u'%d' % segment.bytes_,
+                                 'number': u'%d' % segment.part}).text = segment.mesg_spec.lstrip('<').rstrip('>')
+
+            xml_string = etree.tostring(tree, encoding="utf-8",
+                                 xml_declaration=True,
+                                 pretty_print=True,
+                                 doctype='<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">')    
+            
+            return self.render(xml_string, request, content_type='application/xml',
+                               headers={'Content-Disposition': 'attachment; filename="%s.nzb"' % title})
+        elif action == 'del':
+            if doctype == 'article':
+                ## don't forget riak
+                raise NotImplementedError
+            elif doctype == 'file':
+                deleted = self._sql.query(storage.sql.File)\
+                                    .filter(storage.sql.File.id.in_(ids))\
+                                    .delete(synchronize_session=False)
+
+            elif doctype == 'report':
+                deleted = self._sql.query(storage.sql.Report)\
+                                    .filter(storage.sql.Report.id.in_(ids))\
+                                    .delete(synchronize_session=False)
+            else:
+                raise ValueError('Unknown doctype: %s' % doctype)
+        else:
+            raise ValueError('Unknown action: %s' % action)
+
+        ##TODO: sessions, messaging, idk..
+        return self.get(request, doctype, group_name, *args, **kwargs)
 
     def get(self, request, doctype, group_name=None, *args, **kwargs):
         query = request.GET.get('q', '')
@@ -147,16 +252,11 @@ class Search(ViewsBase):
         ## doctype one of article, file, report
 
         group = None
-        if group_name:
-            group = storage.riak.Group.get(group_name)
-
-        #group = storage.sql.get(self._sql, storage.sql.Group,
-        #                        name=group_name)
 
         if doctype == 'article':
             cq = self._sql.query(storage.sql.Article)
-
             if group_name:
+                group = storage.riak.Group.get(group_name)
                 cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name))
             ## coverage stats
             ## this is not accurate per- se as last_stored resets on
@@ -177,6 +277,8 @@ class Search(ViewsBase):
         elif doctype == 'file':
             cq = self._sql.query(storage.sql.File)
             if group_name:
+                group = storage.sql.get(self._sql, storage.sql.Group,
+                                        name=group_name)
                 cq = cq.filter(storage.sql.File.newsgroups.any(name=group_name))
             ## TODO file stats will be just the percentage of articles with
             ## and without association to a file
@@ -186,6 +288,8 @@ class Search(ViewsBase):
         elif doctype == 'report':
             cq = self._sql.query(storage.sql.Report)
             if group_name:
+                group = storage.sql.get(self._sql, storage.sql.Group,
+                                        name=group_name)
                 cq = cq.filter(storage.sql.Report.newsgroups.any(name=group_name))
             ## TODO stats
             stats = {}
@@ -251,92 +355,6 @@ class ViewReport(ViewsBase):
 
         return self.render({'report': report}, request)
 
-
-class MakeNZB(ViewsBase):
-    template_name = None
-
-    '''
-        NZB format as listed by sabnzbd
-        (DTD mirror: http://www.usenetshack.com/media/docs/DTD/nzb/nzb-1.1.dtd)
-
-        <?xml version="1.0" encoding="iso-8859-1" ?>
-        <!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
-        <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
-         <head>
-           <meta type="title">Your File!</meta>
-           <meta type="tag">Example</meta>
-         </head>
-         <file poster="Joe Bloggs &amp;lt;bloggs@nowhere.example&amp;gt;" date="1071674882" subject="Here's your file!  abc-mr2a.r01 (1/2)">
-           <groups>
-             <group>alt.binaries.newzbin</group>
-             <group>alt.binaries.mojo</group>
-           </groups>
-           <segments>
-             <segment bytes="102394" number="1">123456789abcdef@news.newzbin.com</segment>
-             <segment bytes="4501" number="2">987654321fedbca@news.newzbin.com</segment>
-           </segments>
-         </file>
-        </nzb>
-    '''
-
-    def post(self, request, *args, **kwargs):
-        report_id = request.POST.get('a', None)
-        file_ids = request.POST.get('f', [])
-        #TODO: dum
-        if not isinstance(file_ids, list):
-            file_ids = [file_ids, ]
-
-        ## expects a list of IDs for report and file records
-        ## files, gather lists of associated articles.
-        rfiles = []
-        files = []
-        title = 'selected_files_%s' % int(time.time())
-        if report_id:
-            rfiles = self._sql.query(storage.sql.File)\
-                        .filter_by(report_id=report_id)\
-                        .order_by(storage.sql.File.subject).all()
-
-        if file_ids:
-            files = self._sql.query(storage.sql.File)\
-                            .filter(storage.sql.File.id.in_(file_ids))\
-                            .order_by(storage.sql.File.subject).all()
-
-        files = itertools.chain(rfiles, files)
-
-        ##TODO: factor nzb builder out into its own class
-        from lxml import etree
-
-        tree = etree.XML('''\
-        <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">
-        </nzb>
-        ''')
-
-        head = etree.SubElement(tree, 'head')
-        etree.SubElement(head, 'meta', {'type': 'title'}).text = title
-
-        for file_rec in files:
-            file_ele = etree.SubElement(tree, 'file',
-                            {'poster': file_rec.from_, 
-                             'date': u'%d' % time.mktime(file_rec.date.timetuple()), 
-                             'subject': file_rec.subject})
-            groups = etree.SubElement(file_ele, 'groups')
-            for group in file_rec.newsgroups.order_by(storage.sql.Group.name).all():
-                etree.SubElement(groups, 'group').text = group.name
-
-            segments = etree.SubElement(file_ele, 'segments')
-            for segment in file_rec.articles.order_by(storage.sql.Article.part).all():
-                log.debug([segment.bytes_, segment.part, segment.mesg_spec])
-                etree.SubElement(segments, 'segment',
-                            {'bytes': u'%d' % segment.bytes_,
-                             'number': u'%d' % segment.part}).text = segment.mesg_spec.lstrip('<').rstrip('>')
-
-        xml_string = etree.tostring(tree, encoding="utf-8",
-                             xml_declaration=True,
-                             pretty_print=True,
-                             doctype='<!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">')    
-        
-        return self.render(xml_string, request, content_type='application/xml',
-                           headers={'Content-Disposition': 'attachment; filename="%s.nzb"' % title})
 
 class PagedResults(object):
     def __init__(self, query, sort, page, per_page):

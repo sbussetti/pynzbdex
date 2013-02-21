@@ -1,3 +1,12 @@
+    <div class="pynzb-pager">    
+        <div class="pagination pagination-right pagination-small">
+            <ul>
+                {% for pp in [25, 50, 100] %}
+                <li><a href="?{{ request|query(pp=pp) }}" title="{{ pp }} per page">{{ pp }}</a></li>
+                {% endfor %}
+            </ul>
+        </div>
+
         <div class="pagination pagination-right pagination-small">
             <ul>
                 <li><a href="?{{ request|query(p=1) }}">first</a></li>
@@ -27,4 +36,5 @@
                 <li><a href="?{{ request|query(p=pager.last_page) }}">last</a></li>
             </ul>
         </div>
+    </div>
 

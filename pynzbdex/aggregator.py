@@ -154,6 +154,9 @@ class Aggregator(object):
         will be monitoring redis for new items in order to populate
         the RDBMS with relational data.
         '''
+        ##TODO: introduce some kind of wait state to prevent overflow 
+        ## of redis keyspace
+
         key = article_d.key
         ##TODO: bytes field is for the entire raw post, including headers.
         ##should calculate raw header size and then subtract from field value
@@ -187,6 +190,8 @@ class Aggregator(object):
         (the whole redis layer is simply to prevent slowing down the
         nntp indexer)
         '''
+        ##TODO: introduce some kind of wait state to prevent overflow 
+        ## of redis keyspace
         self._redis.set(mesg_spec, 'EXPIRE')
         self._redis.sadd('newart:%s' % (hash(mesg_spec) % redis_indexbuckets),
                          mesg_spec)
@@ -922,12 +927,12 @@ class Aggregator(object):
 
         ## TODO: possibly use the filepart data when available to more fully 
         ## populate the auto-Report
-        kiss_subject = tuple([re.compile(r, re.I) for r in (
-            r'''(.*)\s*<\s*\d+\s*/\s*\d+\s*\(.*\)\s*>\s*<\s*.*\s*>\s*(.*)''',
-            r'''(.*)\s*\[\s*\d+\s*(?:/|of)\s*\d+\s*\]\s*(.*)''',
-            r'''(.*)(?:\.part\d+|\.vol\d+\+\d+)\s*(.*)''',
-            r'''(.*)(?:\.[a-z0-9_]{2,4})+\s*(.*)''',
-            r'''(.*)(?:[\.\-]sample|sample[\.\-])(.*)''',
+        kill_subject = tuple([re.compile(r, re.I) for r in (
+            r'''\s*<\s*\d+\s*/\s*\d+\s*\(.*\)\s*>\s*<\s*.*\s*>\s*''',
+            r'''\s*\[\s*\d+\s*(/|of)\s*\d+\s*\]\s*''',
+            r'''(\.part\d+|\.vol\d+\+\d+)\s*''',
+            r'''(\.(par2|rar|r[0-9]+|zip|sfv|mkv|avi|iso|divx))+\s*''',
+            r'''[\.\-]?sample[\.\-]?''',
         )])
 
         cursor = 0
@@ -947,23 +952,17 @@ class Aggregator(object):
                     ## look for x of y patterns in subject + parse out
                     ## also look at file extension, if subject matches  and has
                     ## a .r(ar|\d) extension
-                    subject = file_rec.subject
-                    kissed = False
-                    for kiss in kiss_subject:
-                        match = re.match(kiss, subject)
-                        if match:
-                            kissed = True    
-                            subject = u''.join(match.groups(u''))
+                    subject = unicode(file_rec.subject)
+                    for kill in kill_subject:
+                        subject = kill.sub(u'', subject)
 
+                    if subject == file_rec.subject:
+                        log.error("Couldn't parse %s" % file_rec.subject)
+                        raise Exception
+                    ## get or create report with cleaned article subject
                     ##max len unique blah blah
                     subject = subject[:255]
 
-                    if not kissed:
-                        log.error("Couldn't parse %s" % file_rec.subject)
-                        raise Exception
-                    else:
-                        log.debug("Parsed: %s" % subject)
-                    ## get or create report with cleaned article subject
                     report, _ = storage.sql.get_or_create(self._sql,
                                                         storage.sql.Report,
                                                         subject=subject)

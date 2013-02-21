@@ -77,20 +77,26 @@ Base = declarative_base(cls=BaseMixin)
 
 
 group_articles = Table('group_articles', Base.metadata,
-    Column('article_id', Integer, ForeignKey('article.id'), nullable=False),
-    Column('group_id', Integer, ForeignKey('group.id'), nullable=False),
+    Column('article_id', Integer, ForeignKey('article.id', ondelete='CASCADE'),
+            nullable=False),
+    Column('group_id', Integer, ForeignKey('group.id', ondelete='CASCADE'),
+            nullable=False),
     UniqueConstraint('article_id', 'group_id'),
 )
 
 group_files = Table('group_files', Base.metadata,
-    Column('group_id', Integer, ForeignKey('group.id'), nullable=False),
-    Column('file_id', Integer, ForeignKey('file.id'), nullable=False),
+    Column('group_id', Integer, ForeignKey('group.id', ondelete='CASCADE'),
+            nullable=False),
+    Column('file_id', Integer, ForeignKey('file.id', ondelete='CASCADE'),
+            nullable=False),
     UniqueConstraint('file_id', 'group_id'),
 )
 
 group_reports = Table('group_reports', Base.metadata,
-    Column('group_id', Integer, ForeignKey('group.id'), nullable=False),
-    Column('report_id', Integer, ForeignKey('report.id'), nullable=False),
+    Column('group_id', Integer, ForeignKey('group.id', ondelete='CASCADE'),
+            nullable=False),
+    Column('report_id', Integer, ForeignKey('report.id', ondelete='CASCADE'),
+            nullable=False),
     UniqueConstraint('report_id', 'group_id'),
 )
 

@@ -16,7 +16,7 @@ import math
 from pynzbdex import settings
 from pynzbdex.web import resolver
 from pynzbdex.web.views import (Home, SearchGroups, Search, ViewArticle,
-                                ViewFile, MakeNZB, ViewReport, SearchRoute)
+                                ViewFile, ViewReport, SearchRoute)
 
 
 log = logging.getLogger(__name__)
@@ -49,9 +49,6 @@ ROUTES = (
             (r'^view/report/(?P<id>\d+)/$',
                 ViewReport().dispatch,
                 'report_view'),
-            (r'^nzb/$',
-                MakeNZB().dispatch,
-                'make_nzb'),
         )
 
 class Router(object):
