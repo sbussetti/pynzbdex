@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 
+import pytz
 from sqlalchemy.ext.declarative import (declarative_base,
                                         DeferredReflection,
                                         declared_attr, synonym_for)
@@ -22,7 +23,10 @@ class MultipleFoundError(Exception):
 
 
 def exists(session, where):
-    return session.query(sqla_exists().where(where)).scalar()
+    log.debug(session.query(sqla_exists().where(where)))
+    exi = session.query(sqla_exists().where(where)).scalar()
+    log.debug(['EXI', exi])
+    return exi
 
 
 def get_or_create(session, model, defaults={}, **kwargs):
@@ -34,6 +38,7 @@ def get_or_create(session, model, defaults={}, **kwargs):
         ckwargs = dict(defaults, **kwargs)
         instance = model(**ckwargs)
         session.add(instance)
+        session.flush()
         created = True
     return instance, created
 
@@ -68,7 +73,8 @@ class BaseMixin(DeferredReflection):
     def __tablename__(cls):
         return cls.__name__.lower()
 
-    __table_args__ = {'mysql_engine': 'InnoDB'}
+    ## HMMM...
+    #__table_args__ = {'mysql_engine': 'InnoDB'}
 
     id =  Column(Integer, primary_key=True)
 
@@ -138,7 +144,10 @@ class File(Base):
     subject = Column(Unicode(length=511), nullable=False)
     from_ = Column(Unicode(length=127), nullable=False)
 
-    subj_key = Column(String(length=767, collation='latin1_swedish_ci'),
+    ## funky collation is a hack for mysql... bleh
+    #subj_key = Column(String(length=767, collation='latin1_swedish_ci'),
+    #                  nullable=True, unique=True)
+    subj_key = Column(String(length=767, ),
                       nullable=True, unique=True)
 
     complete = Column(Boolean, default=False, nullable=False)
@@ -180,7 +189,7 @@ class Report(Base):
                           lazy='dynamic',
                           backref='reports')
     bytes_ = Column(BigInteger, nullable=False, default=0)
-    date = Column(DateTime(timezone='UTC'), nullable=False, default=datetime.today())
+    date = Column(DateTime(timezone='UTC'), nullable=False, default=datetime.utcnow().replace(tzinfo=pytz.utc))
 
     def __repr__(self):
         return u'%s' % self.subject

@@ -89,7 +89,7 @@ class Home(ViewsBase):
 
     def get(self, request, **kwargs):
         #woah does this need to be cached
-        groups = self._sql.query(storage.sql.Group, 'name', func.count(storage.sql.group_reports.c.report_id).label('total')).join(storage.sql.group_reports).group_by(storage.sql.Group).order_by('name ASC')
+        groups = self._sql.query(storage.sql.Group, 'name', func.count(storage.sql.group_reports.c.report_id).label('total')).outerjoin(storage.sql.group_reports).group_by(storage.sql.Group).order_by('name ASC')
 
         return self.render({'groups': groups}, request)
 
@@ -252,25 +252,26 @@ class Search(ViewsBase):
         ## doctype one of article, file, report
 
         group = None
+        stats = {}
 
         if doctype == 'article':
             cq = self._sql.query(storage.sql.Article)
             if group_name:
                 group = storage.riak.Group.get(group_name)
                 cq = cq.filter(storage.sql.Article.newsgroups.any(name=group_name))
-            ## coverage stats
-            ## this is not accurate per- se as last_stored resets on
-            ## every pass ... need to keep better count
-            indexed = group.last_stored - group.first
-            remaining = group.last - group.last_stored
-            total = group.last - group.first
-            stats = dict(
-                    indexed_pct=int(round((indexed / float(total)) * 100)),
-                    remaining_pct=int(round((remaining / float(total)) * 100)),
-                    indexed=indexed,
-                    remaining=remaining,
-                    total=total,
-                )
+                ## coverage stats
+                ## this is not accurate per- se as last_stored resets on
+                ## every pass ... need to keep better count
+                indexed = group.last_stored - group.first
+                remaining = group.last - group.last_stored
+                total = group.last - group.first
+                stats = dict(
+                        indexed_pct=int(round((indexed / float(total)) * 100)),
+                        remaining_pct=int(round((remaining / float(total)) * 100)),
+                        indexed=indexed,
+                        remaining=remaining,
+                        total=total,
+                    )
 
             if query:
                 cq = cq.filter(storage.sql.Article.subject.like('%%%s%%' % query))
@@ -362,9 +363,6 @@ class PagedResults(object):
             per_page = 100
         offset = (page - 1) * per_page
 
-        #q = storage.riak.Article.solrSearch(query, start=offset,
-        #                               rows=per_page, sort=sort, wt='xml')
-        #total = q.length()
         q = query.order_by()
         total = q.count()
 

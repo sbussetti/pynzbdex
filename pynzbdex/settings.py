@@ -23,6 +23,15 @@ RIAK = {
 DATABASE = {
         'default' : {
             'HOST' : 'sol-db',
+            'PORT' : 5432,
+            'USER' : 'pynzbdex',
+            'PASS' : 'pynzbdex',
+            'NAME' : 'pynzbdex',
+            'DIALECT' : 'postgresql',
+            'DRIVER' : 'psycopg2',
+        },
+        'mysql' : {
+            'HOST' : 'sol-db',
             'PORT' : 3306,
             'USER' : 'pynzbdex',
             'PASS' : 'pynzbdex',

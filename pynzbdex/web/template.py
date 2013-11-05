@@ -1,5 +1,6 @@
 import urllib
 import datetime
+import pytz
 from jinja2 import Template, Environment, PackageLoader
 
 
@@ -13,7 +14,7 @@ def date(value, fmt='%d %b %Y'):
     return value.strftime(fmt)
 
 def age(date, units='days'):
-    return getattr((datetime.datetime.today() - date), units, None)
+    return getattr((datetime.datetime.utcnow().replace(tzinfo=pytz.utc).astimezone(date.tzinfo) - date), units, None)
 
 def humansize(num):
     for x in ['bytes','KB','MB','GB']:

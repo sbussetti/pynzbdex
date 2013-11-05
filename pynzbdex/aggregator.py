@@ -10,11 +10,13 @@ import itertools
 import riak
 import dateutil.parser
 import iso8601
+import pytz
 from redis import StrictRedis
-from sqlalchemy import create_engine, and_
+from sqlalchemy import create_engine, and_, func as sqlfunc, distinct
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import DeferredReflection
 from sqlalchemy.sql import expression
+from sqlalchemy.exc import IntegrityError
 try:
     import cPickle as pickle
 except ImportError:
@@ -41,6 +43,7 @@ sql_chunksize = 10000
 # when querying ranges, the max we'll span
 # (anything larger needs to be divided and aggregated)
 range_stepsize = 10000
+JOB_SIZE = 10000
 
 
 class FieldParsers(object):
@@ -107,13 +110,17 @@ class Aggregator(object):
     __redis = None
     __sql = None
 
-    def __init__(self, redis_pool=None, *args, **kwargs):
+    def __init__(self, job_index, group_name, *args, **kwargs):
         '''
         all connectors should nicely handle all our reconnection bs for us.
         or if it doesn't it will be patched to do so =)
         I guess if we had args for the clients they'd go in here..
         '''
-        pass
+        ## do something with redis pool i guess..
+        args = [unicode(group_name), ] + list(args)
+        self.job_index = job_index
+        self.args = tuple(args)
+        self.kwargs = kwargs
 
     @property
     def _nntp(self):
@@ -139,13 +146,27 @@ class Aggregator(object):
     def _sql(self):
         if not self.__sql:
             sql_cfg = settings.DATABASE['default']
-            dsn = '%(DIALECT)s+%(DRIVER)s://%(USER)s:%(PASS)s@%(HOST)s:%(PORT)s/%(NAME)s?charset=utf8' % sql_cfg
-            sql_engine = create_engine(dsn)
+            dsn = '%(DIALECT)s+%(DRIVER)s://%(USER)s:%(PASS)s@%(HOST)s:%(PORT)s/%(NAME)s' % sql_cfg
+
+            if sql_cfg['DIALECT'] == 'mysql':
+                dsn += '?charset=utf8'
+                sql_engine = create_engine(dsn)
+            elif sql_cfg['DIALECT'] == 'postgresql':
+                sql_engine = create_engine(dsn, client_encoding='utf8')
+                
+
             storage.sql.Base.metadata.create_all(sql_engine)
             DeferredReflection.prepare(sql_engine)
             Session = sessionmaker(bind=sql_engine) #, autoflush=False) #, autocommit=True)
             self.__sql = Session()
         return self.__sql
+
+    def run (self):
+        log.debug([self.__class__, self.args, self.kwargs])
+        return self._run(*self.args, **self.kwargs)
+        
+    def _run (self, *args, **kwargs):
+        raise NotImplementedError
 
     def cache_article_to_redis(self, article_d):
         '''
@@ -290,7 +311,28 @@ class Aggregator(object):
 
         return keys_deleted
 
-    def scrape_groups(self, prefix='alt.binaries.*', refresh=True,
+    def cacheget(self, key, genrec, age=60):
+        raw_rec = self._redis.get(key)
+        if raw_rec:
+            try:
+                rec = pickle.loads(raw_rec)
+            except pickle.UnpicklingError:
+                log.error(raw_rec)
+                raise
+        else:
+            rec = genrec()
+            try:
+                raw_rec = pickle.dumps(rec,
+                                       protocol=settings.PICKLE_PROTOCOL)
+            except pickle.PicklingError:
+                log.error(rec)
+                raise
+            self._redis.setex(key, age, raw_rec)
+        return rec
+
+
+class GroupAggregator(Aggregator):
+    def _run(self, prefix='alt.binaries.*', refresh=True,
                       invalidate=False):
         ## scans the groups we know and prunes ones that do not exist
         ## grouplist is not prohibitvely large as article list,
@@ -393,7 +435,16 @@ class Aggregator(object):
 
         return stats
 
-    def scrape_articles(self, group_name, get_long_headers=False,
+    
+
+class ArticleAggregator(Aggregator):
+    def __init__(self, job_index, *args, **kwargs):
+        if kwargs.get('resume', False):
+            kwargs['offset'] =  job_index * JOB_SIZE
+            kwargs['max_processed'] = JOB_SIZE
+        super(ArticleAggregator, self).__init__(job_index, *args, **kwargs)
+
+    def _run(self, group_name, get_long_headers=False,
                         invalidate=False, cached=True, offset=0,
                         resume=False, max_processed=None):
 
@@ -636,7 +687,13 @@ class Aggregator(object):
                     'last_message_id': previous_article_num, 
                     'complete': (previous_article_num >= group_d.last)}
 
-    def process_redis_cache(self, group_name, step=1, *args, **kwargs):
+
+class RedisProcessor(Aggregator):
+    def __init__(self, job_index, *args, **kwargs):
+        kwargs['step'] = job_index + 1
+        super(RedisProcessor, self).__init__(job_index, *args, **kwargs)
+    
+    def _run(self, group_name, step=1, **kwargs):
         ## this reads the redis cache and stores the resulting
         ## message buckets to the RDBMS -- it's decoupled
         ## through redis with the assumption that this will
@@ -711,6 +768,8 @@ class Aggregator(object):
 
                         art_obj['date'] = datetime\
                                         .fromtimestamp(int(art_obj['date']))
+                        if not art_obj['date'].tzinfo:
+                            art_obj['date'] = art_obj['date'].replace(tzinfo=pytz.utc)
 
                         group_names = art_obj.pop('newsgroups')
 
@@ -721,6 +780,7 @@ class Aggregator(object):
                         for k, v in art_obj.items():
                             setattr(article, k, v)
 
+                        article_groups = []
                         for gn in group_names:
                             group = GROUPS.get(gn, None)
                             if not group:
@@ -728,11 +788,21 @@ class Aggregator(object):
                                                           storage.sql.Group,
                                                           name=gn)
                                 GROUPS[gn] = group
-                            if not storage.sql.exists(self._sql, and_(storage.sql.group_articles.c.article_id == article.id, storage.sql.group_articles.c.group_id == group.id)):
-                                article.newsgroups.append(group) 
+                            if (not storage.sql.exists(self._sql,
+                                    and_(storage.sql.group_articles.c.article_id == article.id,
+                                         storage.sql.group_articles.c.group_id == group.id))):
+                                article_groups.append({'group_id': group.id,
+                                                       'article_id': article.id})
+                        if article_groups:
+                            inserter = storage.sql.group_articles.insert()
+                            self._sql.execute(inserter, article_groups)
+
                         stats['updated'] += 1
 
                     self._sql.flush()
+                except IntegrityError, e:
+                    log.exception(e)
+                    self._sql.rollback()
                 except: ## some failure, roll back redis and sqa
                     log.error(traceback.format_exc())
                     log.debug('ROLLING BACK: %s, %s' % (set_key, mesg_spec))
@@ -746,7 +816,9 @@ class Aggregator(object):
 
         return stats
 
-    def group_articles(self, group_name, *args, **kwargs):
+
+class ArticleProcessor(Aggregator):
+    def _run(self, group_name, *args, **kwargs):
         '''
         this little guy produces "File" records comprised of one
         or more "Articles"
@@ -765,7 +837,7 @@ class Aggregator(object):
                                     id=0,
                                     subject=u'NULL FILE',
                                     defaults={'from_': u'nobody',
-                                              'date': datetime.today(),
+                                              'date': datetime.utcnow().replace(tzinfo=pytz.utc),
                                               'subj_key': u'NULL FILEfrom_'})
         if _: self._sql.commit()
         kill_subject = (
@@ -796,7 +868,8 @@ class Aggregator(object):
                  'deleted': 0} 
 
         cq = self._sql.query(storage.sql.Article)\
-                            .filter(storage.sql.Article.file_id == None)
+                            .filter(storage.sql.Group.name == group_name,
+                                    storage.sql.Article.file_id == None)
 
         cursor = 0
         chunk_processed = None
@@ -804,6 +877,7 @@ class Aggregator(object):
             chunk_processed = 0
             log.info('Articles (%s, %s)' % (cursor, sql_chunksize))
             for article in cq[cursor:sql_chunksize]:
+                log.debug('BEGIN [%s]' % article.subject)
                 try:
                     stats['processed'] += 1
                     chunk_processed += 1
@@ -849,18 +923,13 @@ class Aggregator(object):
 
                     ## we have an article we think could possibly be a filepart
                     ## (same subject) and shares a from.  This needs to be cached.
-                    try:
-                        file_rec = storage.sql.get(self._sql, storage.sql.File,
-                                                   subj_key=(name+article.from_))
-                    except storage.sql.NotFoundError:
-                        file_rec = storage.sql.File(subject=name,
-                                                    from_=article.from_,
+                    file_rec, _ = storage.sql.get_or_create(self._sql,
+                                                    storage.sql.File,
                                                     subj_key=(name+article.from_),
-                                                    date=article.date,
-                                                    parts=parts)
-                        ## must be in session before we add related items..
-                        self._sql.add(file_rec)
-
+                                                    defaults={'subject': name,
+                                                              'from_': article.from_,
+                                                              'date': article.date,
+                                                              'parts': parts})
                     ## stats
                     mutator = {}
 
@@ -871,18 +940,28 @@ class Aggregator(object):
                         mutator['parts'] = parts
 
                     ## relations
+                    file_groups = []
                     for group in article.newsgroups:
-                        #if not file_rec.newsgroups.filter_by(id=group.id).count():
-                        if not storage.sql.exists(self._sql, and_(storage.sql.group_files.c.file_id == file_rec.id, storage.sql.group_files.c.group_id == group.id)):
-                            file_rec.newsgroups.append(group)
+                        file_groups.append({'group_id': group.id,
+                                            'file_id': file_rec.id})
+                    if file_groups:
+                        inserter = (storage.sql.group_files.insert()
+                                        .prefix_with("OR REPLACE"))
+                        self._sql.execute(inserter, file_groups)
+                    log.debug(['GROUPS', file_groups])
 
                     if not article.file_id:
                         mutator['bytes_'] = file_rec.bytes_ + article.bytes_
                         article.file = file_rec
 
                     ## rollup
-                    total_parts = file_rec.articles\
-                                            .group_by(storage.sql.Article.part).count()
+                    total_parts = (self._sql.query(
+                                            sqlfunc.count(
+                                                distinct(storage.sql.Article.part)
+                                            )
+                                        ).filter_by(file_id=file_rec.id)).first()
+                    #total_parts = file_rec.articles.count()
+
                     if (total_parts >= parts):
                         log.info('File Completion: %s of %s' % (total_parts, parts))
                         mutator['complete'] = True
@@ -893,13 +972,14 @@ class Aggregator(object):
 
                     self._sql.flush()
                     stats['updated'] += 1
+                    log.debug('Stored')
                 except:
                     log.error(traceback.format_exc())
                     log.debug('ROLLING BACK')
 
                     self._sql.rollback()
 
-                self._sql.commit()
+                #self._sql.commit()
 
             cursor += chunk_processed
                         
@@ -911,7 +991,9 @@ class Aggregator(object):
         #stats['complete'] = True
         return stats
 
-    def group_files(self, group_name, *args, **kwargs):
+
+class FileProcessor(Aggregator):    
+    def _run(self, group_name, *args, **kwargs):
         stats = {'processed': 0,
                  'updated': 0,
                  'deleted': 0} 
@@ -931,7 +1013,7 @@ class Aggregator(object):
             r'''\s*<\s*\d+\s*/\s*\d+\s*\(.*\)\s*>\s*<\s*.*\s*>\s*''',
             r'''\s*\[\s*\d+\s*(/|of)\s*\d+\s*\]\s*''',
             r'''(\.part\d+|\.vol\d+\+\d+)\s*''',
-            r'''(\.(par2|rar|r[0-9]+|zip|sfv|mkv|avi|iso|divx))+\s*''',
+            r'''(\.(par2?|r(?:ar|[0-9]+)|zip|7z|gz(:?ip)?|sfv|mkv|avi|iso|divx|info|nfo|sr[sr]))+\s*''',
             r'''[\.\-]?sample[\.\-]?''',
         )])
 
@@ -958,7 +1040,7 @@ class Aggregator(object):
 
                     if subject == file_rec.subject:
                         log.error("Couldn't parse %s" % file_rec.subject)
-                        raise Exception
+                        continue
                     ## get or create report with cleaned article subject
                     ##max len unique blah blah
                     subject = subject[:255]
